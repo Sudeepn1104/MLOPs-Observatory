@@ -1,0 +1,11 @@
+batch,accuracy,auc,mean_pred,max_psi,red_features
+0,0.678,0.7017,0.3434,0.0439,
+1,0.668,0.6843,0.3318,0.0543,
+2,0.722,0.6858,0.3138,0.0793,
+3,0.7,0.6677,0.3193,0.2128,age
+4,0.682,0.6562,0.3221,0.4822,"age,income,employment_years"
+5,0.68,0.6655,0.3202,0.5167,"age,income,employment_years"
+6,0.696,0.6738,0.3126,0.8108,"age,income,loan_amount,employment_years"
+7,0.706,0.7247,0.3154,0.9937,"age,income,loan_amount,employment_years"
+8,0.722,0.736,0.3211,1.2926,"age,income,loan_amount,employment_years"
+9,0.722,0.6984,0.3007,1.6557,"age,income,loan_amount,employment_years"
