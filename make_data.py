@@ -10,7 +10,13 @@ from pathlib import Path
 rng = np.random.default_rng(42)
 
 
-def make_loans(n, income_shift=0.0, age_shift=0.0):
+def make_loans(n, income_shift=0.0, age_shift=0.0, concept=0.0):
+    """concept: 0 = original default rule, 1 = fully changed rule (concept drift).
+
+    Input drift (income_shift, age_shift) moves the feature values only.
+    Concept drift changes HOW features lead to default, so a model trained
+    on the old rule gets worse even if the inputs look similar.
+    """
     age = rng.normal(38 + age_shift, 10, n).clip(21, 70)
     income = rng.lognormal(10.8 + income_shift, 0.5, n)
     loan_amount = income * rng.uniform(0.2, 1.5, n)
@@ -18,12 +24,15 @@ def make_loans(n, income_shift=0.0, age_shift=0.0):
     employment_years = (age - 21).clip(0) * rng.uniform(0.1, 0.8, n)
     debt_ratio = rng.beta(2, 5, n)
 
+    c = float(np.clip(concept, 0.0, 1.0))
     z = (
         -2.0
-        + 3.0 * debt_ratio
+        + 1.6 * c  # new rule also raises the overall default rate
+        + (3.0 - 6.0 * c) * debt_ratio  # debt effect flips sign at c=1
         + 1.2 * (loan_amount / income)
-        - 0.006 * (credit_score - 600)
+        - (0.006 - 0.012 * c) * (credit_score - 600)  # credit effect flips too
         - 0.02 * employment_years
+        - 0.05 * c * (age - 38)  # new rule: younger borrowers default more
     )
     p = 1 / (1 + np.exp(-z))
     default = (rng.random(n) < p).astype(int)
