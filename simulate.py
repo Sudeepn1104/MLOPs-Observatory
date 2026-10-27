@@ -31,7 +31,7 @@ if __name__ == "__main__":
     ref = pd.read_csv("models/reference_data.csv")
 
     Path("logs").mkdir(exist_ok=True)
-    rows, feature_rows = [], []
+    rows, feature_rows, all_batches = [], [], []
 
     for i in range(N_BATCHES):
         c = concept_level(i)
@@ -39,6 +39,7 @@ if __name__ == "__main__":
             BATCH_SIZE, income_shift=-0.06 * i, age_shift=1.5 * i, concept=c
         )
         X, y = batch.drop(columns=[TARGET]), batch[TARGET]
+        all_batches.append(batch.assign(batch=i))  # labeled data, used for retraining
 
         report = check_drift(ref, X)
         report.insert(0, "batch", i)
@@ -65,4 +66,5 @@ if __name__ == "__main__":
     log = pd.DataFrame(rows)
     log.to_csv("logs/batch_log.csv", index=False)
     pd.concat(feature_rows).to_csv("logs/feature_drift.csv", index=False)
+    pd.concat(all_batches).to_csv("logs/batches.csv", index=False)
     print(log.to_string(index=False))
