@@ -12,6 +12,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
+from bootstrap import build_all, missing_files
 from drift import check_drift
 from make_data import make_loans
 from registry import get_active, load_registry, reset_registry
@@ -51,21 +52,17 @@ def overall_status(max_psi):
 
 
 # ---------- guard: required files ----------
-needed = [
-    "models/model_v1.joblib",
-    "models/reference_data.csv",
-    "models/model_v1_metrics.json",
-    "logs/batch_log.csv",
-    "logs/feature_drift.csv",
-    "logs/batches.csv",
-]
-missing = [p for p in needed if not Path(p).exists()]
-if missing:
-    st.error(
-        f"Missing files: {', '.join(missing)}. "
-        "Run: python make_data.py, python train.py, python simulate.py"
-    )
-    st.stop()
+if missing_files():
+    try:
+        with st.spinner("First start: building data, model v1 and logs (about 30 seconds)..."):
+            build_all()
+    except Exception as e:
+        st.error(f"Could not build the files automatically ({e}). "
+                 "Run: python make_data.py, python train.py, python simulate.py")
+        st.stop()
+    st.cache_data.clear()
+    st.cache_resource.clear()
+    st.rerun()
 
 if "flash" in st.session_state:
     st.toast(st.session_state.pop("flash"))
