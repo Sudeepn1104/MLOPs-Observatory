@@ -4,7 +4,7 @@ A Streamlit dashboard that watches a trained loan-default model, warns when **da
 
 Built from scratch with Python, pandas, scikit-learn, scipy, plotly and Streamlit. The drift tests (PSI and KS) are my own implementation, not a library.
 
-**Live demo:** _add your Streamlit Cloud link here after deploying_
+**Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/
 
 ## What it does
 
