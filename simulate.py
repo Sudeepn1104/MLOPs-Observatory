@@ -1,6 +1,7 @@
 """Simulates incoming loan batches with growing drift and logs monitoring results.
 
-Input drift starts at batch 0 (incomes fall, borrowers get older).
+Batches are real clients from data/stream_pool.csv (never used for training).
+Input drift starts at batch 0 (lower credit limits, older clients).
 Concept drift (the default rule changes) starts at CONCEPT_START and ramps up,
 so accuracy and AUC visibly drop in the later batches.
 """
@@ -12,9 +13,8 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, f1_score, recall_score, roc_auc_score
 
 from drift import check_drift
-from make_data import make_loans
+from make_data import TARGET, make_batch
 
-TARGET = "default"
 N_BATCHES = 10
 BATCH_SIZE = 500
 CONCEPT_START = 4  # first batch where the default rule starts changing
@@ -41,8 +41,8 @@ def run(model_path="models/model_v1.joblib", ref_path="models/reference_data.csv
 
     for i in range(N_BATCHES):
         c = concept_level(i)
-        batch = make_loans(
-            BATCH_SIZE, income_shift=-0.06 * i, age_shift=1.5 * i, concept=c, rng=rng
+        batch = make_batch(
+            BATCH_SIZE, limit_tilt=-0.12 * i, age_tilt=0.12 * i, concept=c, rng=rng
         )
         X, y = batch.drop(columns=[TARGET]), batch[TARGET]
         all_batches.append(batch.assign(batch=i))  # labeled data, used for retraining
