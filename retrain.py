@@ -81,3 +81,18 @@ def retrain(trigger="manual", root="."):
     reg["models"].append(entry)
     save_registry(reg, root)
     return entry
+
+
+if __name__ == "__main__":
+    import argparse
+
+    p = argparse.ArgumentParser(description="Train a challenger on recent batches and compare.")
+    p.add_argument("--trigger", default="manual (cli)")
+    p.add_argument("--root", default=".")
+    args = p.parse_args()
+    e = retrain(trigger=args.trigger, root=args.root)
+    verdict = "promoted to active" if e["promoted"] else "rejected (not better)"
+    print(
+        f"{e['version']} {verdict}: AUC {e['metrics']['auc']:.3f} vs "
+        f"{e['compared_with']} {e['champion_metrics_on_holdout']['auc']:.3f} on {e['evaluated_on']}"
+    )
