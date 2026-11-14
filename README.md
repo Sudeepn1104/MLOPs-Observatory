@@ -2,7 +2,7 @@
 
 A Streamlit dashboard that watches a credit-default model trained on **real data** (30,000 credit card clients), warns when **data drift** or a **performance drop** happens, retrains the model, and compares v1 against v2 before promoting it.
 
-Built from scratch with Python, pandas, scikit-learn, scipy, plotly and Streamlit. The drift tests (PSI and KS) are my own implementation, not a library.
+Built from scratch with Python, pandas, scikit-learn, scipy, plotly, Streamlit and FastAPI. The drift tests (PSI and KS) are my own implementation, not a library.
 
 **Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/
 
@@ -85,6 +85,45 @@ python -m streamlit run app.py
 
 Run `train.py` again to reset the registry to v1.
 
+## Prediction API
+
+`serve.py` is a FastAPI service that serves the active model:
+
+```
+pip install -r requirements-api.txt
+uvicorn serve:app --port 8000
+```
+
+| Endpoint | What it does |
+|---|---|
+| `GET /health` | Liveness: the process is up |
+| `GET /ready` | Readiness: the active model is loaded |
+| `GET /model` | Active version, metrics, features, threshold |
+| `POST /predict` | Scores 1 to 1,000 clients. Inputs are validated (ranges, no unknown fields) |
+| `GET /monitoring/drift` | PSI and KS of recent requests against the active model's training data |
+
+```
+curl -X POST localhost:8000/predict -H 'content-type: application/json' -d '{"clients": [{"credit_limit": 50000, "age": 29, "education": 2, "marriage": 2, "repay_status_sep": 2, "repay_status_aug": 2, "repay_status_jul": 0, "bill_sep": 48000, "paid_sep": 0, "paid_aug": 1500}]}'
+```
+
+Interactive docs are at `/docs`. Every scored client is logged to SQLite (`logs/predictions.db`), and `/monitoring/drift` runs the same PSI check as the dashboard on that live traffic. That needs no labels, so it's the early warning in production, where true defaults arrive months later. When a retrain promotes a new version, the API picks it up on the next request without a restart.
+
+## Docker
+
+One image runs either service. Model v1 and the monitoring history are built into the image, so a container serves predictions immediately. It runs as a non-root user and has a health check.
+
+```
+docker compose up --build
+```
+
+This starts the API on http://localhost:8000/docs and the dashboard on http://localhost:8501. They share a volume, so a model you promote in the dashboard is served by the API on its next request. To run one service on its own:
+
+```
+docker build -t observatory .
+docker run -p 8000:8000 observatory
+docker run -p 8501:8501 observatory dashboard
+```
+
 ## Tests
 
 ```
@@ -93,7 +132,7 @@ ruff check .
 python -m pytest
 ```
 
-The tests cover PSI and the KS check, the dataset (including its checksum) and batch sampler, the simulator, the registry and retraining, and a smoke test of the dashboard itself. GitHub Actions runs them on every push and pull request, on Python 3.11 with the oldest supported library versions and on Python 3.13 with the newest.
+The tests cover the prediction API (validation, logging, live drift, picking up a promoted model), PSI and the KS check, the dataset (including its checksum) and batch sampler, the simulator, the registry and retraining, and a smoke test of the dashboard itself. GitHub Actions runs them on every push and pull request, on Python 3.11 with the oldest supported library versions and on Python 3.13 with the newest. It also builds the Docker image and smoke-tests both containers.
 
 ## Results
 
