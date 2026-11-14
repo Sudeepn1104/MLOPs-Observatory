@@ -3,5 +3,5 @@ numpy
 scikit-learn
 scipy
 joblib
-streamlit
+streamlit>=1.50
 plotly

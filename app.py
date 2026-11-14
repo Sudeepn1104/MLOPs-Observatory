@@ -165,7 +165,7 @@ with tab_monitor:
             labels=dict(x="Batch", y="Feature", color="PSI"),
         )
         fig.update_xaxes(dtick=1)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         st.caption("Green < 0.1, yellow 0.1 to 0.2, red > 0.2 (values above 0.3 shown as red).")
 
     with right:
@@ -184,7 +184,7 @@ with tab_monitor:
             y=baseline_auc, line_dash="dot", annotation_text="v1 test AUC", opacity=0.6
         )
         fig2.update_layout(xaxis_title="Batch", yaxis_title="Score", yaxis_range=[0, 1])
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
         st.caption(
             "Accuracy alone can hide problems (most loans do not default), "
             "so AUC and F1 are tracked too."
@@ -194,14 +194,14 @@ with tab_monitor:
     fig3 = px.line(batch_log, x="batch", y="max_psi", markers=True)
     fig3.add_hline(y=PSI_RED, line_dash="dash", line_color="#d64545", annotation_text="0.2 retrain")
     fig3.add_hline(y=PSI_YELLOW, line_dash="dash", line_color="#e8b931", annotation_text="0.1 watch")
-    st.plotly_chart(fig3, use_container_width=True)
+    st.plotly_chart(fig3, width="stretch")
 
     st.subheader("Inspect a batch")
     b = st.slider("Batch", int(batch_log["batch"].min()), int(batch_log["batch"].max()),
                   int(batch_log["batch"].max()))
     detail = feature_log[feature_log["batch"] == b].drop(columns="batch").copy()
     detail.insert(0, "", detail["status"].map(STATUS_ICON))
-    st.dataframe(detail, hide_index=True, use_container_width=True)
+    st.dataframe(detail, hide_index=True, width="stretch")
 
     # downloadable drift report (full log, one row per batch per feature)
     report = feature_log.merge(
@@ -248,7 +248,7 @@ with tab_inject:
 
         rep = rep.copy()
         rep.insert(0, "", rep["status"].map(STATUS_ICON))
-        st.dataframe(rep, hide_index=True, use_container_width=True)
+        st.dataframe(rep, hide_index=True, width="stretch")
         st.caption(
             "Tip: input drift alone turns PSI red but barely hurts AUC. "
             "Add concept drift to see performance fall. Drift is measured against "
@@ -294,7 +294,7 @@ with tab_registry:
                 "evaluated_on": m["evaluated_on"],
             }
         )
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     st.caption(
         "Metrics in different rows use different test sets, so compare models "
         "only in the chart below (same holdout)."
@@ -314,7 +314,7 @@ with tab_registry:
         )
         fig4 = px.bar(cmp, x="metric", y="score", color="model", barmode="group", text_auto=".2f")
         fig4.update_layout(yaxis_range=[0, 1])
-        st.plotly_chart(fig4, use_container_width=True)
+        st.plotly_chart(fig4, width="stretch")
         if last["promoted"]:
             st.success(f"{new_v} beat {old_v} on AUC and is now the active model.")
         else:
