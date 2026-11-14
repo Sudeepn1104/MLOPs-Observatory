@@ -20,6 +20,9 @@ permissions:
   packages: write
   id-token: write
   attestations: write
+  # actions/attest-build-provenance v4 creates an artifact storage record when
+  # it pushes the attestation to the registry, which needs this permission
+  artifact-metadata: write
 
 concurrency:
   group: release-${{ github.ref }}
