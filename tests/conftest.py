@@ -18,9 +18,7 @@ sys.path.insert(0, str(ROOT))
 @pytest.fixture
 def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    import registry
-
-    monkeypatch.setattr(registry, "REGISTRY", Path("models/registry.json"))
+    monkeypatch.setenv("OBSERVATORY_SANDBOX", "0")  # tests opt in to sandbox mode explicitly
     return tmp_path
 
 

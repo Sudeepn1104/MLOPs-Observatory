@@ -26,8 +26,9 @@ Either way the model quietly gets worse, and nobody notices unless something is 
 3. **Checks if the model is still right.** It tracks accuracy and AUC (how well the model separates defaulters from non-defaulters). AUC falls from 0.81 to 0.43, worse than a coin flip.
 4. **Sounds the alarm.** If PSI goes above 0.2 or AUC drops more than 0.05, it says "retrain now".
 5. **Trains a replacement and keeps it only if it is better.** v2 is trained on recent data and tested against v1 on the same data. It is promoted only if it scores at least as well.
-6. **Lets you break it on purpose.** Sliders in the Drift injector tab change the data or the rules live, so you can watch the alarms react.
-7. **Documents itself.** The Model card tab explains the model's purpose, data and failure modes.
+6. **Keeps watching the new model.** New batches are scored by whichever model is active, so you can watch v2 take over and recover. Each model is judged against its own baseline.
+7. **Lets you break it on purpose.** Sliders in the Drift injector tab change the data or the rules live, so you can watch the alarms react.
+8. **Documents itself.** The Model card tab explains the model's purpose, data and failure modes.
 
 When only the rules change, the data looks normal and PSI stays green while the model fails. That is why the alarm uses both signals (see [Key finding](#key-finding-silent-failure)).
 
@@ -41,16 +42,18 @@ In one sentence: it is a smoke detector for a credit model. It spots when the mo
 | Accuracy, AUC and F1 trend lines | Monitoring tab |
 | Retrain rule: max PSI > 0.2 or AUC drop > 0.05 | Sidebar and Monitoring tab |
 | Live drift injector (input drift and concept drift sliders) | Drift injector tab |
+| Stream new batches scored by the active model; "v2 takes over" marker | Monitoring tab |
 | Retrain button, auto-retrain, v1 vs v2 comparison, promotion check | Model registry tab |
+| Private sandbox per visitor on the live demo | Automatic on Streamlit Cloud |
 | Model card with data, limits and failure modes | Model card tab |
 | Downloadable drift report (CSV) | Monitoring tab |
 
 ## Screenshots
 
-![Overview: drift status RED and retrain rule fired](screenshots/overview.png)
-![Monitoring](screenshots/monitoring.png)
-![Model registry](screenshots/registry.png)
-![Silent failure: PSI green but AUC 0.43](screenshots/injector.png)
+![Overview: v1 under drift, status RED and retrain rule fired](screenshots/overview.png)
+![Monitoring: drift heatmap and performance, v2 takes over at batch 10](screenshots/monitoring.png)
+![Model registry: v1 vs v2 on the same recent holdout](screenshots/registry.png)
+![Silent failure: PSI green but AUC 0.40](screenshots/injector.png)
 
 ## Key finding: silent failure
 
@@ -62,9 +65,11 @@ When the data **inputs** shift, PSI turns red. When the **rule** that decides de
 2. `train.py` trains RandomForest v1 (balanced class weights) and saves the model and its reference data.
 3. `simulate.py` sends 10 batches of 500 clients with growing input drift. Concept drift starts at batch 4. It logs PSI, KS and metrics per batch.
 4. `drift.py` computes PSI and the KS test per feature.
-5. `retrain.py` trains a challenger on the last 4 batches, tests both models on the same holdout, and promotes the challenger only if its AUC is at least as good.
-6. `registry.py` keeps a JSON record of every version with metrics and timestamps.
-7. `app.py` is the dashboard.
+5. `monitor.py` applies the retrain rule to the active model, using only the batches it scored itself and its own baseline AUC. It also streams new batches, which keep the drifted conditions of batch 9 and are scored by the active model.
+6. `retrain.py` trains a challenger on the last 4 batches, tests both models on the same holdout, and promotes the challenger only if its AUC is at least as good.
+7. `registry.py` keeps a JSON record of every version with metrics and timestamps.
+8. `workspace.py` gives each visitor of the live demo a private sandbox, so one person's Retrain or Reset doesn't change what others see. Locally everything stays in the project folder. Set `OBSERVATORY_SANDBOX=1` or `0` to force it on or off.
+9. `app.py` is the dashboard.
 
 PSI thresholds: below 0.1 stable, 0.1 to 0.2 watch, above 0.2 drift.
 
@@ -100,7 +105,7 @@ The tests cover PSI and the KS check, the dataset (including its checksum) and b
 
 v1 scores AUC 0.77 and F1 0.53 on its own test split. Batches are only 500 rows, so batch AUC moves about ±0.03 from noise alone.
 
-After retraining on recent data, v2 reaches AUC 0.67 on the same recent holdout where v1 scores 0.58.
+After retraining on recent data, v2 reaches AUC 0.67 on the same recent holdout where v1 scores 0.58. On the next three streamed batches v2 scores AUC 0.70 to 0.72 with every feature green again, so the alarm clears.
 
 ## Data
 

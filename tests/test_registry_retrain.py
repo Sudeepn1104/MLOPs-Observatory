@@ -1,19 +1,8 @@
 import json
 from pathlib import Path
 
-import pandas as pd
-
 import registry
-from retrain import retrain, retrain_policy
-
-
-def test_policy_fires_on_psi_or_auc():
-    ok = pd.DataFrame({"max_psi": [0.05, 0.05], "auc": [0.70, 0.70]})
-    assert retrain_policy(ok, baseline_auc=0.70) == []
-    psi_bad = ok.assign(max_psi=[0.05, 0.3])
-    assert "PSI" in retrain_policy(psi_bad, 0.70)[0]
-    auc_bad = ok.assign(auc=[0.6, 0.6])
-    assert "AUC" in retrain_policy(auc_bad, 0.70)[0]
+from retrain import retrain
 
 
 def test_registry_bootstraps_v1(trained):
@@ -44,3 +33,13 @@ def test_retrain_promotes_and_reset_cleans_up(trained):
     assert reg["active"] == "v1" and len(reg["models"]) == 1
     assert not Path("models/model_v2.joblib").exists()
     assert Path("models/model_v1.joblib").exists()
+
+
+def test_workspace_root_keeps_project_registry_untouched(trained, tmp_path_factory):
+    other = tmp_path_factory.mktemp("visitor")
+    entry = retrain(trigger="test", root=other)
+    assert Path(entry["file"]).parent == other / "models"
+    assert registry.load_registry(other)["active"] == "v2"
+    # the project-level registry is still at v1
+    assert registry.load_registry()["active"] == "v1"
+    assert not Path("models/model_v2.joblib").exists()

@@ -1,4 +1,4 @@
-"""Tiny MLOps Observatory: Streamlit dashboard (Day 4).
+"""Tiny MLOps Observatory: Streamlit dashboard.
 
 Run:  streamlit run app.py
 Needs: python make_data.py, python train.py, python simulate.py first.
@@ -15,8 +15,19 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from bootstrap import build_all, missing_files
 from drift import check_drift
 from make_data import FEATURE_NAMES, TRAIN, make_batch
+from monitor import (
+    AUC_DROP,
+    PSI_RED,
+    RULE_WINDOW,
+    can_auto_retrain,
+    evaluate,
+    load_logs,
+    reset_stream,
+    stream_next,
+)
 from registry import get_active, load_registry, reset_registry
-from retrain import AUC_DROP, PSI_RED, RECENT_BATCHES, retrain, retrain_policy
+from retrain import RECENT_BATCHES, retrain
+from workspace import sandbox_enabled, session_root
 
 TARGET = "default"
 PSI_YELLOW = 0.1
@@ -41,12 +52,6 @@ def load_reference(path, mtime):
     return pd.read_csv(path)
 
 
-@st.cache_data
-def load_logs():
-    return (
-        pd.read_csv("logs/batch_log.csv"),
-        pd.read_csv("logs/feature_drift.csv"),
-    )
 
 
 def overall_status(max_psi):
@@ -73,28 +78,34 @@ if missing_files():
 if "flash" in st.session_state:
     st.toast(st.session_state.pop("flash"))
 
-reg = load_registry()
+root = session_root(st.session_state)  # project dir locally, private dir on the live demo
+reg = load_registry(root)
 active = get_active(reg)
 model = load_model(active["file"], _mtime(active["file"]))
 ref = load_reference(active["reference"], _mtime(active["reference"]))
-batch_log, feature_log = load_logs()
-baseline_auc = reg["models"][0]["metrics"]["auc"]  # v1 test AUC = healthy baseline
+batch_log, feature_log = load_logs(root)
+baseline_auc = active["metrics"]["auc"]  # each model is judged against its own baseline
 
 # ---------- retrain rule + optional auto-retrain ----------
-reasons = retrain_policy(batch_log, baseline_auc)
+reasons, own_log = evaluate(batch_log, active)
 
 st.sidebar.header("Retrain policy")
 st.sidebar.write(
     f"Retrain when **max PSI > {PSI_RED}** or when **AUC drops more than {AUC_DROP}** "
-    "below the baseline (mean of the last 2 batches)."
+    f"below the active model's own baseline (mean of its last {RULE_WINDOW} batches)."
 )
 auto = st.sidebar.toggle("Auto-retrain when the rule fires", value=False)
 st.sidebar.caption(
-    "Auto mode retrains once per drift episode (only while v1 is the only version). "
-    "Use Reset in the Model registry tab to demo again."
+    "Auto mode retrains at most once per new batch, so a rejected challenger "
+    "doesn't trigger a retrain on every refresh."
 )
-if auto and reasons and len(reg["models"]) == 1:
-    entry = retrain(trigger="auto: " + "; ".join(reasons))
+if sandbox_enabled():
+    st.sidebar.info(
+        "You have a private sandbox: your retrains, resets and streamed batches "
+        "don't affect other visitors. It resets when you reload the page."
+    )
+if auto and reasons and can_auto_retrain(reg, batch_log):
+    entry = retrain(trigger="auto: " + "; ".join(reasons), root=root)
     verdict = "promoted" if entry["promoted"] else "rejected"
     st.session_state["flash"] = f"Auto-retrain ran: {entry['version']} {verdict}"
     st.rerun()
@@ -112,48 +123,75 @@ tab_monitor, tab_inject, tab_registry, tab_card = st.tabs(
 # TAB 1: monitoring over the simulated batches
 # =====================================================
 with tab_monitor:
-    latest = batch_log.iloc[-1]
-    first = batch_log.iloc[0]
-    status = overall_status(latest["max_psi"])
-
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Active model", active["version"])
-    c2.metric(
-        "Drift status",
-        f"{STATUS_ICON[status]} {status.upper()}",
-        f"max PSI {latest['max_psi']:.2f}",
-        delta_color="off",
-    )
-    c3.metric(
-        "AUC (latest batch)",
-        f"{latest['auc']:.3f}",
-        f"{latest['auc'] - first['auc']:+.3f} vs batch 0",
-    )
-    c4.metric(
-        "Accuracy (latest batch)",
-        f"{latest['accuracy']:.3f}",
-        f"{latest['accuracy'] - first['accuracy']:+.3f} vs batch 0",
-    )
+    if own_log.empty:
+        status = None
+        c2.metric("Drift status", "⏳ WAITING", "no batches yet", delta_color="off")
+        c3.metric("AUC (latest batch)", "n/a")
+        c4.metric(f"{active['version']} baseline AUC", f"{baseline_auc:.3f}")
+    else:
+        latest = own_log.iloc[-1]
+        status = overall_status(latest["max_psi"])
+        c2.metric(
+            "Drift status",
+            f"{STATUS_ICON[status]} {status.upper()}",
+            f"max PSI {latest['max_psi']:.2f}",
+            delta_color="off",
+        )
+        c3.metric(
+            f"AUC (batch {int(latest['batch'])})",
+            f"{latest['auc']:.3f}",
+            f"{latest['auc'] - baseline_auc:+.3f} vs {active['version']} baseline",
+        )
+        c4.metric(
+            f"Batches scored by {active['version']}",
+            len(own_log),
+            f"{latest['accuracy']:.3f} accuracy (latest)",
+            delta_color="off",
+        )
 
-    if reasons:
+    if status is None:
+        st.info(
+            f"{active['version']} has just been promoted and hasn't scored any batches yet. "
+            "Stream a batch below to start monitoring it."
+        )
+    elif reasons:
         st.error("RETRAIN RULE FIRED: " + "; ".join(reasons) + ".")
-        if len(reg["models"]) == 1:
-            st.info("Go to the **Model registry** tab to retrain, or turn on auto-retrain in the sidebar.")
-        elif active["version"] != "v1":
-            st.success(
-                f"Already retrained. Active model is {active['version']}. "
-                "See the Model registry tab."
-            )
-        else:
+        st.info("Go to the **Model registry** tab to retrain, or turn on auto-retrain in the sidebar.")
+        rejected_since = [
+            m for m in reg["models"]
+            if m["status"] == "rejected" and m.get("compared_with") == active["version"]
+        ]
+        if rejected_since:
             st.warning(
-                "A retrain ran but the challenger did not beat v1, so v1 is still active. "
-                "See the Model registry tab."
+                f"A challenger ({rejected_since[-1]['version']}) was already tried and didn't "
+                f"beat {active['version']}. Stream more batches before retraining again."
             )
     elif status == "yellow":
         st.warning("Watch: some features are drifting (PSI 0.1 to 0.2). No retrain needed yet.")
     else:
-        st.success("All features stable. No retrain needed.")
-    st.caption("These monitoring logs were produced by model v1 on the simulated batches.")
+        st.success(f"{active['version']} is healthy: inputs stable and AUC within its baseline.")
+
+    s1, s2, _ = st.columns([1, 1, 3])
+    n_stream = 0
+    if s1.button("Stream next batch", type="primary"):
+        n_stream = 1
+    if s2.button("Stream 3 batches"):
+        n_stream = 3
+    if n_stream:
+        for _ in range(n_stream):
+            row = stream_next(reg, root)
+        st.session_state["flash"] = (
+            f"Streamed {n_stream} batch(es); batch {row['batch']} scored by {row['model']}: "
+            f"AUC {row['auc']:.3f}, max PSI {row['max_psi']:.2f}"
+        )
+        st.rerun()
+    st.caption(
+        "Batches 0 to 9 are the drift scenario, scored by v1. Streamed batches keep the "
+        "drifted conditions of batch 9 and are scored by whichever model is active, "
+        "so you can watch a retrained model take over."
+    )
 
     left, right = st.columns([3, 2])
 
@@ -179,7 +217,11 @@ with tab_monitor:
         )
         fig.update_xaxes(dtick=1)
         st.plotly_chart(fig, width="stretch")
-        st.caption("Green < 0.1, yellow 0.1 to 0.2, red > 0.2 (values above 0.3 shown as red).")
+        st.caption(
+            "Green < 0.1, yellow 0.1 to 0.2, red > 0.2 (values above 0.3 shown as red). "
+            "Each batch is compared with the training data of the model that scored it, "
+            "so after a retrain the drifted world becomes the new normal."
+        )
 
     with right:
         st.subheader("Model performance per batch")
@@ -194,8 +236,16 @@ with tab_monitor:
                 go.Scatter(x=batch_log["batch"], y=batch_log[m], mode="lines+markers", name=m)
             )
         fig2.add_hline(
-            y=baseline_auc, line_dash="dot", annotation_text="v1 test AUC", opacity=0.6
+            y=baseline_auc, line_dash="dot",
+            annotation_text=f"{active['version']} baseline AUC",
+            annotation_position="bottom right", opacity=0.6,
         )
+        switches = batch_log[batch_log["model"] != batch_log["model"].shift()].iloc[1:]
+        for _, sw in switches.iterrows():
+            fig2.add_vline(
+                x=sw["batch"] - 0.5, line_dash="dash", line_color="#888",
+                annotation_text=f"{sw['model']} takes over", annotation_position="top left",
+            )
         fig2.update_layout(xaxis_title="Batch", yaxis_title="Score", yaxis_range=[0, 1])
         st.plotly_chart(fig2, width="stretch")
         st.caption(
@@ -218,7 +268,7 @@ with tab_monitor:
 
     # downloadable drift report (full log, one row per batch per feature)
     report = feature_log.merge(
-        batch_log[["batch", "accuracy", "auc", "f1"]], on="batch", how="left"
+        batch_log[["batch", "model", "accuracy", "auc", "f1"]], on="batch", how="left"
     )
     st.download_button(
         "Download drift report (CSV)",
@@ -288,13 +338,14 @@ with tab_registry:
 
     b1, b2, _ = st.columns([1, 1, 3])
     if b1.button("Retrain now", type="primary"):
-        entry = retrain(trigger="manual (button)")
+        entry = retrain(trigger="manual (button)", root=root)
         verdict = "promoted to active" if entry["promoted"] else "rejected (not better)"
         st.session_state["flash"] = f"{entry['version']} {verdict}"
         st.rerun()
     if b2.button("Reset to v1"):
-        reset_registry()
-        st.session_state["flash"] = "Registry reset to v1"
+        reset_registry(root)
+        reset_stream(root)
+        st.session_state["flash"] = "Registry reset to v1 and streamed batches cleared"
         st.rerun()
 
     st.subheader("All versions")
@@ -393,7 +444,8 @@ with tab_card:
         f"- **Drift test:** PSI per feature (green < 0.1, yellow 0.1 to 0.2, red > 0.2) "
         "plus a KS test, both written from scratch with numpy and scipy.\n"
         f"- **Retrain rule:** max PSI > {PSI_RED}, or AUC more than {AUC_DROP} below the "
-        "v1 baseline (mean of the last 2 batches).\n"
+        f"active model's own baseline (mean of its last {RULE_WINDOW} batches). Each model "
+        "is judged only on batches it scored itself.\n"
         f"- **Retraining data:** the last {RECENT_BATCHES} labeled batches.\n"
         "- **Promotion:** a new version replaces the active one only if its AUC is at "
         "least as good on the same holdout."
