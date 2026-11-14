@@ -1,0 +1,35 @@
+# The API and the dashboard share one volume for models/ and logs/, so a model
+# promoted in the dashboard is served by the API on its next request.
+#   docker compose up --build
+#   API:       http://localhost:8000/docs
+#   Dashboard: http://localhost:8501
+services:
+  api:
+    build: .
+    image: mlops-observatory:latest
+    command: ["api"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - models:/app/models
+      - logs:/app/logs
+    restart: unless-stopped
+
+  dashboard:
+    image: mlops-observatory:latest
+    command: ["dashboard"]
+    environment:
+      OBSERVATORY_SANDBOX: "0"  # one shared registry, so the API sees its promotions
+    ports:
+      - "8501:8501"
+    volumes:
+      - models:/app/models
+      - logs:/app/logs
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  models:
+  logs:

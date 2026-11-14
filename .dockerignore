@@ -1,0 +1,13 @@
+.git
+.github
+**/__pycache__
+.pytest_cache
+.ruff_cache
+models
+logs
+data/train.csv
+data/stream_pool.csv
+screenshots
+tests
+*.md
+!data/SOURCE.md

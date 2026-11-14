@@ -5,3 +5,4 @@ desktop.ini
 data/train.csv
 data/stream_pool.csv
 logs/stream_*.csv
+logs/predictions.db*

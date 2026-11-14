@@ -1,0 +1,4 @@
+# Prediction API (serve.py), on top of the core dependencies.
+-r requirements.txt
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
