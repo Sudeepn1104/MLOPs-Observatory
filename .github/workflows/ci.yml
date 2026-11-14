@@ -46,6 +46,24 @@ jobs:
           python train.py
           python simulate.py
 
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pip-audit
+      - name: Known vulnerabilities in the locked dependencies
+        run: pip-audit -r requirements-lock.txt --require-hashes --disable-pip
+      - name: Lock file matches requirements
+        run: |
+          pip install uv
+          uv pip compile -q requirements-api.txt --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --generate-hashes -o requirements-lock.txt --custom-compile-command "uv pip compile requirements-api.txt --python-version 3.12 --python-platform x86_64-unknown-linux-gnu --generate-hashes -o requirements-lock.txt"
+          git diff --exit-code requirements-lock.txt || (echo "::error::requirements-lock.txt is out of date: run the uv pip compile command at its top and commit" && exit 1)
+
   docker:
     name: docker image (build + smoke test)
     runs-on: ubuntu-latest
@@ -53,22 +71,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate compose file
-        run: docker compose config --quiet
+        run: API_KEY=ci-key-0123456789abcdef docker compose config --quiet
       - name: Build
-        run: docker build -t mlops-observatory:ci .
-      - name: Smoke test the API
+        run: docker build --build-arg GIT_SHA=${{ github.sha }} -t mlops-observatory:ci .
+      - name: Production image refuses to start without an API key
         run: |
-          docker run -d --name api -p 8000:8000 mlops-observatory:ci
+          if docker run --rm mlops-observatory:ci python -c "import serve; serve.Settings.from_env()"; then
+            echo "::error::the API started without API_KEY"; exit 1
+          fi
+      - name: Smoke test the API
+        env:
+          KEY: ci-key-0123456789abcdef
+        run: |
+          docker run -d --name api -p 8000:8000 -e API_KEY=$KEY mlops-observatory:ci
           for i in $(seq 1 30); do
             [ "$(docker inspect -f '{{.State.Health.Status}}' api)" = healthy ] && break
             sleep 3
           done
           docker inspect -f '{{.State.Health.Status}}' api | grep -q healthy
           curl -fsS localhost:8000/ready
-          curl -fsS -X POST localhost:8000/predict -H 'content-type: application/json' \
+          curl -fsS localhost:8000/version | grep -q "${{ github.sha }}"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/predict -H 'content-type: application/json' -d '{}')" = 401
+          curl -fsS -X POST localhost:8000/predict -H "X-API-Key: $KEY" -H 'content-type: application/json' \
             -d '{"clients":[{"credit_limit":50000,"age":29,"education":2,"marriage":2,"repay_status_sep":2,"repay_status_aug":2,"repay_status_jul":0,"bill_sep":48000,"paid_sep":0,"paid_aug":1500}]}' \
             | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['model_version']=='v1' and 0<=d['predictions'][0]['default_probability']<=1; print(d)"
-          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/predict -H 'content-type: application/json' -d '{"clients":[{"age":5}]}')" = 422
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST localhost:8000/predict -H "X-API-Key: $KEY" -H 'content-type: application/json' -d '{"clients":[{"age":5}]}')" = 422
+          curl -fsS localhost:8000/metrics -H "X-API-Key: $KEY" | grep -q observatory_predictions_total
           test "$(docker exec api id -u)" = 10001
       - name: Smoke test the dashboard
         run: |

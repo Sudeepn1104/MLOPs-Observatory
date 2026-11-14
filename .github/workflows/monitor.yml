@@ -2,7 +2,9 @@ name: Scheduled model check
 
 # Weekly health check of the model. When the retrain rule fires it opens one
 # GitHub issue labelled drift-alert (or updates the open one), and it closes
-# that issue once the model is healthy again.
+# that issue once the model is healthy again. With the repository secrets
+# OBSERVATORY_API_URL and OBSERVATORY_API_KEY set, it also checks live traffic
+# on the deployed API.
 on:
   schedule:
     - cron: "17 6 * * 1"  # Mondays 06:17 UTC
@@ -49,9 +51,13 @@ jobs:
           python monitor.py stream 2
       - name: Run the check
         id: check
+        env:
+          # optional: also check live traffic on the deployed API (see DEPLOY.md)
+          API_URL: ${{ secrets.OBSERVATORY_API_URL }}
+          API_KEY: ${{ secrets.OBSERVATORY_API_KEY }}
         run: |
           set +e
-          python check.py --json report.json --markdown report.md
+          python check.py --json report.json --markdown report.md ${API_URL:+--api-url "$API_URL"}
           code=$?
           set -e
           cat report.md >> "$GITHUB_STEP_SUMMARY"

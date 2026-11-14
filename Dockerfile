@@ -1,23 +1,34 @@
 # syntax=docker/dockerfile:1
 # One image for both services: the prediction API (default) and the dashboard.
 #   docker build -t observatory .
-#   docker run -p 8000:8000 observatory                     # API at :8000/docs
-#   docker run -p 8501:8501 observatory dashboard           # dashboard at :8501
-FROM python:3.12-slim
+#   docker run -p 8000:8000 -e API_KEY=<16+ chars> observatory        # API at :8000/docs
+#   docker run -p 8501:8501 observatory dashboard                       # dashboard at :8501
+# The image runs in production mode: the API refuses to start without API_KEY.
+# Base image pinned by digest; Dependabot proposes updates.
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
+ARG GIT_SHA=unknown
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    OBSERVATORY_ENV=production \
+    GIT_SHA=${GIT_SHA}
+
+LABEL org.opencontainers.image.title="mlops-observatory" \
+      org.opencontainers.image.description="Credit-default model API and monitoring dashboard" \
+      org.opencontainers.image.source="https://github.com/Sudeepn1104/MLOPs-Observatory" \
+      org.opencontainers.image.revision=${GIT_SHA}
 
 WORKDIR /app
 
-# dependencies first, so code changes don't reinstall them
-COPY requirements.txt requirements-api.txt ./
-RUN pip install -r requirements-api.txt
+# exact, hash-checked dependencies first, so code changes don't reinstall them
+COPY requirements-lock.txt ./
+RUN pip install --require-hashes --no-deps -r requirements-lock.txt
 
 COPY *.py ./
 COPY data/credit_default_raw.csv.gz data/SOURCE.md ./data/
+COPY .streamlit ./.streamlit
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
 # build model v1 and the monitoring history into the image, so a container

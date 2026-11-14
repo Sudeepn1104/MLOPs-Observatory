@@ -1,0 +1,29 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+# Dashboard -> New -> Blueprint -> pick this repo. Render builds the Dockerfile,
+# generates API_KEY, and redeploys on every push to main.
+services:
+  - type: web
+    name: mlops-observatory-api
+    runtime: docker
+    plan: free            # 512 MB: one worker (~200 MB) fits. Sleeps after 15 min idle.
+    region: oregon
+    branch: main
+    autoDeploy: true
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /ready
+    envVars:
+      - key: API_KEY
+        generateValue: true   # read it under Environment in the Render dashboard
+      - key: API_WORKERS
+        value: "1"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: MAX_REQUEST_BYTES
+        value: "1000000"
+    # The free plan has no persistent disk: the prediction log and any promoted
+    # model reset on each deploy or restart. On a paid plan, keep them:
+    # disk:
+    #   name: observatory-state
+    #   mountPath: /app/logs
+    #   sizeGB: 1

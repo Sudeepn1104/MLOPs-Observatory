@@ -19,6 +19,8 @@ sys.path.insert(0, str(ROOT))
 def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("OBSERVATORY_SANDBOX", "0")  # tests opt in to sandbox mode explicitly
+    for var in ("OBSERVATORY_ENV", "API_KEY", "MAX_REQUEST_BYTES"):
+        monkeypatch.delenv(var, raising=False)  # tests opt in to production settings explicitly
     return tmp_path
 
 
