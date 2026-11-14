@@ -23,7 +23,7 @@ Either way the model quietly gets worse, and nobody notices unless something is 
 
 1. **Sends in new data.** 10 batches of new applicants, each a bit more different from the training data.
 2. **Checks if the data looks different.** A PSI score per feature shows how far the new data has moved: green (fine), yellow (watch), red (changed a lot).
-3. **Checks if the model is still right.** It tracks accuracy and AUC (how well the model separates defaulters from non-defaulters). AUC falls from 0.70 to 0.43, worse than a coin flip.
+3. **Checks if the model is still right.** It tracks accuracy and AUC (how well the model separates defaulters from non-defaulters). AUC falls from about 0.69 to 0.42, worse than a coin flip.
 4. **Sounds the alarm.** If PSI goes above 0.2 or AUC drops more than 0.05, it says "retrain now".
 5. **Trains a replacement and keeps it only if it is better.** v2 is trained on recent data and tested against v1 on the same data. It is promoted only if it scores at least as well.
 6. **Lets you break it on purpose.** Sliders in the Drift injector tab change the data or the rules live, so you can watch the alarms react.
@@ -80,14 +80,26 @@ python -m streamlit run app.py
 
 Run `train.py` again to reset the registry to v1.
 
+## Tests
+
+```
+pip install -r requirements-dev.txt
+ruff check .
+python -m pytest
+```
+
+The tests cover PSI and the KS check, the data generator, the simulator, the registry and retraining, and a smoke test of the dashboard itself. GitHub Actions runs them on every push and pull request, on Python 3.11 with the oldest supported library versions and on Python 3.13 with the newest.
+
 ## Results
 
 | | Batch 0 | Batch 9 (drifted) |
 |---|---|---|
-| AUC (v1) | 0.70 | 0.43 |
-| F1 (v1) | 0.38 | 0.11 |
+| AUC (v1) | 0.63 | 0.42 |
+| F1 (v1) | 0.32 | 0.04 |
 
-After retraining on recent data, v2 reaches AUC 0.68 on the same recent holdout where v1 scores 0.51.
+v1 scores AUC 0.69 on its own test split. Batches are only 500 rows, so batch AUC moves about ±0.03 from noise alone.
+
+After retraining on recent data, v2 reaches AUC 0.62 on the same recent holdout where v1 scores 0.47.
 
 ## Limits
 

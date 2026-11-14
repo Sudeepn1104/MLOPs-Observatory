@@ -25,13 +25,19 @@ STATUS_ICON = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 st.set_page_config(page_title="Tiny MLOps Observatory", layout="wide")
 
 
+def _mtime(path):
+    return Path(path).stat().st_mtime_ns
+
+
 @st.cache_resource
-def load_model(path):
+def load_model(path, mtime):
+    # mtime is part of the cache key: after Reset, model_v2.joblib can be
+    # re-created at the same path and must not be served from the old cache
     return joblib.load(path)
 
 
 @st.cache_data
-def load_reference(path):
+def load_reference(path, mtime):
     return pd.read_csv(path)
 
 
@@ -69,8 +75,8 @@ if "flash" in st.session_state:
 
 reg = load_registry()
 active = get_active(reg)
-model = load_model(active["file"])
-ref = load_reference(active["reference"])
+model = load_model(active["file"], _mtime(active["file"]))
+ref = load_reference(active["reference"], _mtime(active["reference"]))
 batch_log, feature_log = load_logs()
 baseline_auc = reg["models"][0]["metrics"]["auc"]  # v1 test AUC = healthy baseline
 
@@ -131,9 +137,14 @@ with tab_monitor:
         st.error("RETRAIN RULE FIRED: " + "; ".join(reasons) + ".")
         if len(reg["models"]) == 1:
             st.info("Go to the **Model registry** tab to retrain, or turn on auto-retrain in the sidebar.")
-        else:
+        elif active["version"] != "v1":
             st.success(
                 f"Already retrained. Active model is {active['version']}. "
+                "See the Model registry tab."
+            )
+        else:
+            st.warning(
+                "A retrain ran but the challenger did not beat v1, so v1 is still active. "
                 "See the Model registry tab."
             )
     elif status == "yellow":

@@ -1,6 +1,8 @@
 """Tiny model registry: a JSON file that tracks every model version."""
 import json
+import os
 import re
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -8,7 +10,16 @@ REGISTRY = Path("models/registry.json")
 
 
 def save_registry(reg):
-    REGISTRY.write_text(json.dumps(reg, indent=2))
+    """Writes atomically: a crash or a second writer never leaves half a file."""
+    REGISTRY.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=REGISTRY.parent, prefix=".registry-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(reg, f, indent=2)
+        os.replace(tmp, REGISTRY)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def load_registry():
