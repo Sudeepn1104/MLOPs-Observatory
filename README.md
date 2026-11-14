@@ -6,6 +6,8 @@ Built from scratch with Python, pandas, scikit-learn, scipy, plotly, Streamlit a
 
 **Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/
 
+**Deploying:** the API ships as a hardened Docker image with a one-click Render Blueprint. See [DEPLOY.md](DEPLOY.md).
+
 ## In simple words
 
 The observatory is a health monitor for a machine-learning model. It watches the model after it is put to work, notices when it starts going wrong, and helps replace it with a better one.
@@ -98,21 +100,26 @@ uvicorn serve:app --port 8000
 |---|---|
 | `GET /health` | Liveness: the process is up |
 | `GET /ready` | Readiness: the active model is loaded |
-| `GET /model` | Active version, metrics, features, threshold |
-| `POST /predict` | Scores 1 to 1,000 clients. Inputs are validated (ranges, no unknown fields) |
-| `GET /monitoring/drift` | PSI and KS of recent requests against the active model's training data |
+| `GET /version` | App version, git commit, active model |
+| `GET /model` 🔑 | Active version, metrics, features, threshold |
+| `POST /predict` 🔑 | Scores 1 to 1,000 clients. Inputs are validated (ranges, no unknown fields) |
+| `GET /monitoring/drift` 🔑 | PSI and KS of recent requests against the active model's training data |
+| `GET /metrics` 🔑 | Prometheus metrics |
+
+🔑 needs an `X-API-Key` header when `API_KEY` is set. Locally it's optional. In production (`OBSERVATORY_ENV=production`, the Docker image's default) the API refuses to start without a key.
 
 ```
-curl -X POST localhost:8000/predict -H 'content-type: application/json' -d '{"clients": [{"credit_limit": 50000, "age": 29, "education": 2, "marriage": 2, "repay_status_sep": 2, "repay_status_aug": 2, "repay_status_jul": 0, "bill_sep": 48000, "paid_sep": 0, "paid_aug": 1500}]}'
+curl -X POST localhost:8000/predict -H "X-API-Key: $API_KEY" -H 'content-type: application/json' -d '{"clients": [{"credit_limit": 50000, "age": 29, "education": 2, "marriage": 2, "repay_status_sep": 2, "repay_status_aug": 2, "repay_status_jul": 0, "bill_sep": 48000, "paid_sep": 0, "paid_aug": 1500}]}'
 ```
 
-Interactive docs are at `/docs`. Every scored client is logged to SQLite (`logs/predictions.db`), and `/monitoring/drift` runs the same PSI check as the dashboard on that live traffic. That needs no labels, so it's the early warning in production, where true defaults arrive months later. When a retrain promotes a new version, the API picks it up on the next request without a restart.
+Interactive docs are at `/docs`. Every response carries an `X-Request-ID`, and production logs are one JSON line per request. Every scored client is logged to SQLite (`logs/predictions.db`), and `/monitoring/drift` runs the same PSI check as the dashboard on that live traffic. That needs no labels, so it's the early warning in production, where true defaults arrive months later. When a retrain promotes a new version, the API picks it up on the next request without a restart.
 
 ## Docker
 
-One image runs either service. Model v1 and the monitoring history are built into the image, so a container serves predictions immediately. It runs as a non-root user and has a health check.
+One image runs either service. Model v1 and the monitoring history are built into the image, so a container serves predictions immediately. It runs as a non-root user, installs exact hash-checked dependencies (`requirements-lock.txt`) on a digest-pinned base image, and has a health check.
 
 ```
+cp .env.example .env    # set API_KEY
 docker compose up --build
 ```
 
@@ -120,7 +127,7 @@ This starts the API on http://localhost:8000/docs and the dashboard on http://lo
 
 ```
 docker build -t observatory .
-docker run -p 8000:8000 observatory
+docker run -p 8000:8000 -e API_KEY=<at least 16 characters> observatory
 docker run -p 8501:8501 observatory dashboard
 ```
 
@@ -133,7 +140,7 @@ python check.py                              # 0 healthy or waiting, 1 alert, 2 
 python check.py --api-url http://localhost:8000 --json report.json --markdown report.md
 ```
 
-With `--api-url` it also checks live traffic through the API's `/monitoring/drift`.
+With `--api-url` it also checks live traffic through the API's `/monitoring/drift`, sending `$API_KEY`. Add the repository secrets `OBSERVATORY_API_URL` and `OBSERVATORY_API_KEY` and the weekly run checks your deployed API too.
 
 `.github/workflows/monitor.yml` runs the check every Monday and on demand (**Actions → Scheduled model check → Run workflow**). It keeps exactly one GitHub issue labelled `drift-alert`:
 
@@ -157,7 +164,7 @@ ruff check .
 python -m pytest
 ```
 
-The tests cover the prediction API (validation, logging, live drift, picking up a promoted model), the scheduled check, PSI and the KS check, the dataset (including its checksum) and batch sampler, the simulator, the registry and retraining, and a smoke test of the dashboard itself. GitHub Actions runs them on every push and pull request, on Python 3.11 with the oldest supported library versions and on Python 3.13 with the newest. It also builds the Docker image and smoke-tests both containers.
+The tests cover the prediction API (validation, logging, live drift, picking up a promoted model), the scheduled check, PSI and the KS check, the dataset (including its checksum) and batch sampler, the simulator, the registry and retraining, and a smoke test of the dashboard itself. GitHub Actions runs them on every push and pull request, on Python 3.11 with the oldest supported library versions and on Python 3.13 with the newest. It also audits the locked dependencies for known vulnerabilities, builds the Docker image and smoke-tests both containers. Releases are published to GitHub Container Registry with a vulnerability scan, an SBOM and build provenance (see [DEPLOY.md](DEPLOY.md)).
 
 ## Results
 

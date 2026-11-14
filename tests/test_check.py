@@ -45,3 +45,19 @@ def test_live_traffic_drift_adds_a_reason(trained, monkeypatch):
 def test_broken_check_exits_2(workdir):
     # no model, no logs: the check must fail loudly, not report healthy
     assert check.main([]) == 2
+
+
+def test_live_check_sends_the_api_key(monkeypatch):
+    import io
+    import json as _json
+
+    seen = {}
+
+    def fake_urlopen(req, timeout):
+        seen["url"], seen["key"] = req.full_url, req.get_header("X-api-key")
+        return io.BytesIO(_json.dumps({"status": "green"}).encode())
+
+    monkeypatch.setattr(check.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setenv("API_KEY", "first-key-0123456789,second-key-0123456789")
+    assert check.fetch_live_drift("https://api.example.com/") == {"status": "green"}
+    assert seen == {"url": "https://api.example.com/monitoring/drift", "key": "first-key-0123456789"}

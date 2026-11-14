@@ -1,13 +1,21 @@
 # The API and the dashboard share one volume for models/ and logs/, so a model
 # promoted in the dashboard is served by the API on its next request.
+#   cp .env.example .env    # then set API_KEY
 #   docker compose up --build
-#   API:       http://localhost:8000/docs
+#   API:       http://localhost:8000/docs   (send X-API-Key)
 #   Dashboard: http://localhost:8501
 services:
   api:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_SHA: ${GIT_SHA:-local}
     image: mlops-observatory:latest
     command: ["api"]
+    environment:
+      API_KEY: ${API_KEY:?set API_KEY in .env (see .env.example)}
+      API_WORKERS: ${API_WORKERS:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "8000:8000"
     volumes:

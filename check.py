@@ -1,7 +1,7 @@
 """Scheduled health check: applies the retrain rule and reports the result.
 
     python check.py                               # check the project workspace
-    python check.py --api-url http://api:8000     # also check live API traffic
+    python check.py --api-url http://api:8000     # also check live API traffic (sends $API_KEY)
     python check.py --json report.json --markdown report.md
 
 Exit codes: 0 healthy (or waiting for data), 1 alert, 2 the check itself failed.
@@ -10,6 +10,7 @@ an alert into a GitHub issue.
 """
 import argparse
 import json
+import os
 import sys
 import urllib.request
 from datetime import UTC, datetime
@@ -21,9 +22,12 @@ from registry import get_active, load_registry
 ICON = {"alert": "🔴", "healthy": "🟢", "waiting": "⏳"}
 
 
-def fetch_live_drift(api_url, timeout=10):
+def fetch_live_drift(api_url, timeout=10, api_key=None):
+    """Reads the API's /monitoring/drift. Sends API_KEY (env) as X-API-Key if set."""
     url = api_url.rstrip("/") + "/monitoring/drift"
-    with urllib.request.urlopen(url, timeout=timeout) as r:  # noqa: S310 - URL comes from the operator
+    key = api_key if api_key is not None else os.environ.get("API_KEY", "").split(",")[0].strip()
+    req = urllib.request.Request(url, headers={"X-API-Key": key} if key else {})
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 - URL comes from the operator
         return json.load(r)
 
 
