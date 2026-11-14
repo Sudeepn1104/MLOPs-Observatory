@@ -10,6 +10,12 @@ updates:
   - package-ecosystem: docker
     directory: /
     schedule: {interval: weekly}
+    # Stay on Python 3.12: requirements-lock.txt is compiled for it, so a new
+    # Python version must be a deliberate change that regenerates the lock.
+    # Security patches still arrive as digest updates of python:3.12-slim.
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: github-actions
     directory: /
     schedule: {interval: weekly}
