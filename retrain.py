@@ -7,11 +7,11 @@ from datetime import datetime
 
 import joblib
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from registry import get_active, load_registry, save_registry
+from train import build_model
 
 TARGET = "default"
 RECENT_BATCHES = 4  # how many of the latest batches to learn from
@@ -66,8 +66,7 @@ def retrain(trigger="manual"):
         X, y, test_size=0.3, random_state=42, stratify=y
     )
 
-    challenger = RandomForestClassifier(n_estimators=200, max_depth=8, random_state=42)
-    challenger.fit(X_tr, y_tr)
+    challenger = build_model().fit(X_tr, y_tr)
 
     champ_model = joblib.load(champion["file"])
     champ_metrics = _metrics(champ_model, X_te, y_te)

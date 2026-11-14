@@ -2,3 +2,5 @@ __pycache__/
 models/
 *.joblib
 desktop.ini
+data/train.csv
+data/stream_pool.csv

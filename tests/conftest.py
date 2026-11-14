@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import joblib
+import pandas as pd
 import pytest
 from sklearn.ensemble import RandomForestClassifier
 
@@ -25,25 +26,26 @@ def workdir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def trained(workdir):
-    """A tiny but real v1: data, model, reference, metrics and simulated logs."""
+    """A small but real v1: data split, model, reference, metrics and simulated logs."""
     import json
-
-    import numpy as np
+    import shutil
 
     import make_data
     import simulate
 
-    rng = np.random.default_rng(0)
-    df = make_data.make_loans(3000, rng=rng)
     Path("data").mkdir()
-    df.to_csv("data/loan.csv", index=False)
-    X, y = df.drop(columns=["default"]), df["default"]
+    shutil.copy(ROOT / "data" / "credit_default_raw.csv.gz", "data/")
+    make_data.prepare()
+    df = pd.read_csv(make_data.TRAIN)
+    X, y = df.drop(columns=[make_data.TARGET]), df[make_data.TARGET]
     Path("models").mkdir()
-    model = RandomForestClassifier(n_estimators=30, max_depth=6, random_state=0).fit(X, y)
+    model = RandomForestClassifier(
+        n_estimators=30, max_depth=6, class_weight="balanced", random_state=0
+    ).fit(X, y)
     joblib.dump(model, "models/model_v1.joblib")
     X.to_csv("models/reference_data.csv", index=False)
     Path("models/model_v1_metrics.json").write_text(
-        json.dumps({"accuracy": 0.7, "f1": 0.4, "auc": 0.7})
+        json.dumps({"accuracy": 0.77, "f1": 0.5, "auc": 0.76})
     )
     simulate.run()
     return workdir
