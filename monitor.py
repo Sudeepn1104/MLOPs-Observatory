@@ -119,3 +119,22 @@ def can_auto_retrain(reg, batch_log):
     latest = int(batch_log["batch"].max())
     last_retrain = max((m.get("data_until_batch", -1) for m in reg["models"]), default=-1)
     return latest > last_retrain
+
+
+if __name__ == "__main__":
+    import argparse
+
+    from registry import load_registry
+
+    p = argparse.ArgumentParser(description="Stream new batches to the active model.")
+    p.add_argument("command", choices=["stream"])
+    p.add_argument("n", type=int, nargs="?", default=1)
+    p.add_argument("--root", default=".")
+    args = p.parse_args()
+    reg = load_registry(args.root)
+    for _ in range(args.n):
+        row = stream_next(reg, args.root)
+        print(
+            f"batch {row['batch']} scored by {row['model']}: AUC {row['auc']:.3f}, "
+            f"max PSI {row['max_psi']:.2f}"
+        )

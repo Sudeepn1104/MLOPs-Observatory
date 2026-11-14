@@ -124,6 +124,31 @@ docker run -p 8000:8000 observatory
 docker run -p 8501:8501 observatory dashboard
 ```
 
+## Scheduled checks and alerts
+
+`check.py` applies the retrain rule to the active model and prints a report. It exits with 1 when the rule fires, so any scheduler or CI system can act on it:
+
+```
+python check.py                              # 0 healthy or waiting, 1 alert, 2 the check failed
+python check.py --api-url http://localhost:8000 --json report.json --markdown report.md
+```
+
+With `--api-url` it also checks live traffic through the API's `/monitoring/drift`.
+
+`.github/workflows/monitor.yml` runs the check every Monday and on demand (**Actions → Scheduled model check → Run workflow**). It keeps exactly one GitHub issue labelled `drift-alert`:
+
+- **Rule fires:** opens the issue with the report, or updates the open one in place, so there's no comment on every run.
+- **Model healthy again:** comments with the new report and closes the issue.
+
+The run has two scenarios. `drifted` checks v1 after the 10 drifted batches, so the alert fires. `retrained` retrains, streams 2 batches to the new model and checks again, so it's healthy and closes the alert. Each run rebuilds from the committed data, so the weekly scheduled run checks the drifted scenario and keeps the alert open until you resolve it.
+
+Command-line helpers used by the workflow, also handy locally:
+
+```
+python retrain.py               # train a challenger and promote it if better
+python monitor.py stream 3      # stream 3 new batches to the active model
+```
+
 ## Tests
 
 ```
@@ -132,7 +157,7 @@ ruff check .
 python -m pytest
 ```
 
-The tests cover the prediction API (validation, logging, live drift, picking up a promoted model), PSI and the KS check, the dataset (including its checksum) and batch sampler, the simulator, the registry and retraining, and a smoke test of the dashboard itself. GitHub Actions runs them on every push and pull request, on Python 3.11 with the oldest supported library versions and on Python 3.13 with the newest. It also builds the Docker image and smoke-tests both containers.
+The tests cover the prediction API (validation, logging, live drift, picking up a promoted model), the scheduled check, PSI and the KS check, the dataset (including its checksum) and batch sampler, the simulator, the registry and retraining, and a smoke test of the dashboard itself. GitHub Actions runs them on every push and pull request, on Python 3.11 with the oldest supported library versions and on Python 3.13 with the newest. It also builds the Docker image and smoke-tests both containers.
 
 ## Results
 
@@ -160,5 +185,4 @@ The UCI [Default of Credit Card Clients](https://doi.org/10.24432/C55S3H) datase
 
 ## Next
 
-- Scheduled monitoring and alerts
 - Per-feature drift for categorical columns
