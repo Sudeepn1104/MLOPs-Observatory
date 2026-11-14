@@ -47,6 +47,7 @@ In one sentence: it is a smoke detector for a loan model. It spots when the mode
 
 ## Screenshots
 
+![Overview: drift status RED and retrain rule fired](screenshots/overview.png)
 ![Monitoring](screenshots/monitoring.png)
 ![Model registry](screenshots/registry.png)
 ![Silent failure: PSI green but AUC 0.43](screenshots/injector.png)
