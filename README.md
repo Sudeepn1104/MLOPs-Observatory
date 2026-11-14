@@ -6,6 +6,33 @@ Built from scratch with Python, pandas, scikit-learn, scipy, plotly and Streamli
 
 **Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/
 
+## In simple words
+
+The observatory is a health monitor for a machine-learning model. It watches the model after it is put to work, notices when it starts going wrong, and helps replace it with a better one.
+
+**The model.** It predicts whether a person will fail to repay a loan, from age, income, credit score, debt ratio, loan amount and years employed.
+
+**The problem.** A model learns from the world as it was, and the world keeps changing. This happens in two ways:
+
+1. **The people change (input drift).** Applicants start being older, earning more or asking for bigger loans than the people the model learned from.
+2. **The rules change (concept drift).** Applicants look the same, but what makes someone default has changed, for example after an economic shock.
+
+Either way the model quietly gets worse, and nobody notices unless something is watching.
+
+**What the observatory does:**
+
+1. **Sends in new data.** 10 batches of new applicants, each a bit more different from the training data.
+2. **Checks if the data looks different.** A PSI score per feature shows how far the new data has moved: green (fine), yellow (watch), red (changed a lot).
+3. **Checks if the model is still right.** It tracks accuracy and AUC (how well the model separates defaulters from non-defaulters). AUC falls from 0.70 to 0.43, worse than a coin flip.
+4. **Sounds the alarm.** If PSI goes above 0.2 or AUC drops more than 0.05, it says "retrain now".
+5. **Trains a replacement and keeps it only if it is better.** v2 is trained on recent data and tested against v1 on the same data. It is promoted only if it scores at least as well.
+6. **Lets you break it on purpose.** Sliders in the Drift injector tab change the data or the rules live, so you can watch the alarms react.
+7. **Documents itself.** The Model card tab explains the model's purpose, data and failure modes.
+
+When only the rules change, the data looks normal and PSI stays green while the model fails. That is why the alarm uses both signals (see [Key finding](#key-finding-silent-failure)).
+
+In one sentence: it is a smoke detector for a loan model. It spots when the model's view of the world is out of date, tells you, and safely swaps in an updated model.
+
 ## What it does
 
 | Feature | Where |
