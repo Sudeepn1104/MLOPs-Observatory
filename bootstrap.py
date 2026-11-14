@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 NEEDED = [
+    "data/loan.csv",
     "models/model_v1.joblib",
     "models/reference_data.csv",
     "models/model_v1_metrics.json",

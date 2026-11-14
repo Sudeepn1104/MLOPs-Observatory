@@ -4,7 +4,6 @@ Champion/challenger rule: the new model is promoted only if its AUC on the
 same recent holdout is at least as good as the current active model's.
 """
 from datetime import datetime
-from pathlib import Path
 
 import joblib
 import pandas as pd

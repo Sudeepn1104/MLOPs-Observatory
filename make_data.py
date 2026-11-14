@@ -3,20 +3,25 @@
 Use this to start immediately. Later, replace data/loan.csv with a real
 Kaggle loan default CSV (keep the target column named 'default').
 """
-import numpy as np
-import pandas as pd
 from pathlib import Path
 
-rng = np.random.default_rng(42)
+import numpy as np
+import pandas as pd
+
+_rng = np.random.default_rng(42)
 
 
-def make_loans(n, income_shift=0.0, age_shift=0.0, concept=0.0):
+def make_loans(n, income_shift=0.0, age_shift=0.0, concept=0.0, rng=None):
     """concept: 0 = original default rule, 1 = fully changed rule (concept drift).
+
+    rng: optional numpy Generator. Pass your own so a caller (for example the
+    batch simulator) does not replay the same random draws as the training data.
 
     Input drift (income_shift, age_shift) moves the feature values only.
     Concept drift changes HOW features lead to default, so a model trained
     on the old rule gets worse even if the inputs look similar.
     """
+    rng = _rng if rng is None else rng
     age = rng.normal(38 + age_shift, 10, n).clip(21, 70)
     income = rng.lognormal(10.8 + income_shift, 0.5, n)
     loan_amount = income * rng.uniform(0.2, 1.5, n)

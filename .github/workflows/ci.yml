@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (py${{ matrix.python }}, ${{ matrix.deps }} deps)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # oldest Python with the oldest versions requirements.txt allows
+          - python: "3.11"
+            deps: lowest
+          # newest Python with the newest versions
+          - python: "3.13"
+            deps: highest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip uv
+          uv pip install --system --resolution ${{ matrix.deps == 'lowest' && 'lowest-direct' || 'highest' }} -r requirements-dev.txt
+      - name: Lint
+        run: ruff check .
+      - name: Test
+        run: python -m pytest
+      - name: End-to-end pipeline
+        run: |
+          python make_data.py
+          python train.py
+          python simulate.py
