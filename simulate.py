@@ -9,11 +9,11 @@ dashboard) keep the batch-9 conditions.
 """
 from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, f1_score, recall_score, roc_auc_score
 
+import registry
 from drift import check_drift
 from make_data import TARGET, make_batch
 
@@ -77,11 +77,11 @@ def score_batch(model, ref, batch, i, version, concept):
     return row, report
 
 
-def run(model_path="models/model_v1.joblib", ref_path="models/reference_data.csv",
-        out_dir="logs", seed=SIM_SEED):
+def run(out_dir="logs", seed=SIM_SEED):
     """Scores N_BATCHES simulated batches with v1 and writes the three monitoring logs."""
-    model = joblib.load(model_path)
-    ref = pd.read_csv(ref_path)
+    v1 = registry.load_registry()["models"][0]
+    model = registry.load_model(v1)
+    ref = registry.load_reference(v1)
     rng = np.random.default_rng(seed)
 
     out = Path(out_dir)

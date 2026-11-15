@@ -1,10 +1,10 @@
-import joblib
 import numpy as np
 import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
 import make_data
+import registry
 from retrain import retrain
 
 
@@ -35,7 +35,8 @@ def test_predict_matches_the_model(api):
     assert r.status_code == 200
     body = r.json()
     assert body["model_version"] == "v1" and len(body["predictions"]) == 25
-    expected = joblib.load("models/model_v1.joblib").predict_proba(pd.DataFrame(batch))[:, 1]
+    v1 = registry.load_model(registry.load_registry()["models"][0])
+    expected = v1.predict_proba(pd.DataFrame(batch))[:, 1]
     got = [p["default_probability"] for p in body["predictions"]]
     assert np.allclose(got, expected, atol=1e-4)
     assert all(p["default"] == (p["default_probability"] >= 0.5) for p in body["predictions"])

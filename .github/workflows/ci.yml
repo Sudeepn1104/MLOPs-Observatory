@@ -106,6 +106,18 @@ jobs:
             sleep 3
           done
           docker inspect -f '{{.State.Health.Status}}' dash | grep -q healthy
+      - name: MLflow UI image reads the store the app image built
+        run: |
+          docker build -f Dockerfile.mlflow -t mlops-observatory-mlflow:ci .
+          docker volume create models
+          docker run --rm -v models:/app/models mlops-observatory:ci true   # copies the image's store into the volume
+          docker run -d --name mlflow -p 5000:5000 -v models:/app/models mlops-observatory-mlflow:ci
+          for i in $(seq 1 30); do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' mlflow)" = healthy ] && break
+            sleep 3
+          done
+          curl -fsS "localhost:5000/api/2.0/mlflow/registered-models/alias?name=credit-default&alias=champion" \
+            | python3 -c "import json,sys; v=json.load(sys.stdin)['model_version']; assert str(v['version'])=='1', v; print('champion is v1')"
       - name: Container logs on failure
         if: failure()
-        run: docker logs api; docker logs dash || true
+        run: docker logs api; docker logs dash; docker logs mlflow || true

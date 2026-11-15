@@ -5,13 +5,13 @@ Needs: python make_data.py, python train.py, python simulate.py first.
 """
 from pathlib import Path
 
-import joblib
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
+import registry
 from bootstrap import build_all, missing_files
 from drift import check_drift
 from make_data import FEATURE_NAMES, TRAIN, make_batch
@@ -36,22 +36,16 @@ STATUS_ICON = {"green": "🟢", "yellow": "🟡", "red": "🔴"}
 st.set_page_config(page_title="Tiny MLOps Observatory", layout="wide")
 
 
-def _mtime(path):
-    return Path(path).stat().st_mtime_ns
+@st.cache_resource(max_entries=8)
+def load_model(model_uri):
+    # an MLflow artifact URI contains the run ID, so it is unique per trained
+    # model: a v2 re-created after Reset can never be served from this cache
+    return registry.load_model({"model_uri": model_uri})
 
 
-@st.cache_resource
-def load_model(path, mtime):
-    # mtime is part of the cache key: after Reset, model_v2.joblib can be
-    # re-created at the same path and must not be served from the old cache
-    return joblib.load(path)
-
-
-@st.cache_data
-def load_reference(path, mtime):
-    return pd.read_csv(path)
-
-
+@st.cache_data(max_entries=8)
+def load_reference(reference_uri):
+    return registry.load_reference({"reference_uri": reference_uri})
 
 
 def overall_status(max_psi):
@@ -81,8 +75,8 @@ if "flash" in st.session_state:
 root = session_root(st.session_state)  # project dir locally, private dir on the live demo
 reg = load_registry(root)
 active = get_active(reg)
-model = load_model(active["file"], _mtime(active["file"]))
-ref = load_reference(active["reference"], _mtime(active["reference"]))
+model = load_model(active["model_uri"])
+ref = load_reference(active["reference_uri"])
 batch_log, feature_log = load_logs(root)
 baseline_auc = active["metrics"]["auc"]  # each model is judged against its own baseline
 
@@ -362,9 +356,15 @@ with tab_registry:
                 "f1": m["metrics"]["f1"],
                 "auc": m["metrics"]["auc"],
                 "evaluated_on": m["evaluated_on"],
+                "mlflow_run": (m.get("run_id") or "")[:8],
             }
         )
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    st.caption(
+        f"The registry is MLflow: each row is a version of the registered model "
+        f"`{registry.MODEL_NAME}`, and the active one is where the `{registry.ALIAS}` alias "
+        "points. `mlflow_run` is the run that holds its parameters, metrics and model file."
+    )
     st.caption(
         "Metrics in different rows use different test sets, so compare models "
         "only in the chart below (same holdout)."
@@ -448,7 +448,11 @@ with tab_card:
         "is judged only on batches it scored itself.\n"
         f"- **Retraining data:** the last {RECENT_BATCHES} labeled batches.\n"
         "- **Promotion:** a new version replaces the active one only if its AUC is at "
-        "least as good on the same holdout."
+        "least as good on the same holdout.\n"
+        "- **Tracking and registry:** every training run is logged to MLflow (parameters, "
+        "metrics, model, reference data). The model in production is the registered "
+        f"version the `{registry.ALIAS}` alias points at. Model files use the skops "
+        "format, which cannot run code when loaded (unlike pickle)."
     )
 
     st.subheader("Known limits and failure modes")

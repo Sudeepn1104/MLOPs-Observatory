@@ -1,7 +1,7 @@
 #!/bin/sh
 # Starts the prediction API (default) or the dashboard. Anything else is run as a command.
 #   PORT          port to listen on (hosts like Render set it; default 8000 / 8501)
-#   API_WORKERS   uvicorn worker processes (default 1; each holds the model, ~200 MB)
+#   API_WORKERS   uvicorn worker processes (default 1; each holds the model, ~330 MB)
 set -e
 case "$1" in
   api)

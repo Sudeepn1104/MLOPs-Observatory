@@ -28,8 +28,8 @@ From then on, every push to `main` redeploys. Render only switches traffic once 
 
 **Free plan limits:**
 - The service sleeps after 15 minutes without traffic. The first request after that takes about a minute.
-- 512 MB RAM fits one worker (each holds the model, about 200 MB).
-- There is no persistent disk, so the prediction log resets on every deploy and restart. On a paid plan, uncomment the `disk:` block in `render.yaml` to keep it.
+- 512 MB RAM fits one worker (each holds the model and the MLflow client, about 330 MB).
+- There is no persistent disk, so the prediction log and the MLflow store reset to the image's v1 on every deploy and restart. On a paid plan, uncomment the `disk:` block in `render.yaml` to keep it.
 
 ## 2. Configuration
 
@@ -38,7 +38,7 @@ From then on, every push to `main` redeploys. Render only switches traffic once 
 | `API_KEY` | (none) | Accepted key(s), comma-separated. Required: the image runs with `OBSERVATORY_ENV=production` and refuses to start without one. Keys must be at least 16 characters. |
 | `OBSERVATORY_ENV` | `production` in the image, `development` otherwise | Production requires a key and logs as JSON |
 | `PORT` | 8000 (API), 8501 (dashboard) | Port to listen on. Render sets it. |
-| `API_WORKERS` | 1 | uvicorn workers. Each needs about 200 MB. Scale out with more instances rather than more workers, because metrics are per process. |
+| `API_WORKERS` | 1 | uvicorn workers. Each needs about 330 MB. Scale out with more instances rather than more workers, because metrics are per process. |
 | `MAX_REQUEST_BYTES` | 1000000 | Larger request bodies get 413 before they're parsed |
 | `LOG_LEVEL` | INFO | |
 | `GIT_SHA` | build arg, or Render's `RENDER_GIT_COMMIT` | Reported by `/version` |
@@ -88,12 +88,14 @@ gh attestation verify oci://ghcr.io/sudeepn1104/mlops-observatory:latest --owner
 
 New GHCR packages can start private. If `docker pull` is denied, open the package on GitHub (**Packages → mlops-observatory → Package settings**) and set the visibility to public.
 
-Locally, with the dashboard alongside:
+Locally, with the dashboard and the MLflow UI alongside:
 
 ```
 cp .env.example .env    # set API_KEY
 docker compose up --build
 ```
+
+The MLflow UI (http://localhost:5000) has no login, so compose binds it to this machine only. Don't expose it to the internet without putting authentication in front of it.
 
 ## 5. Dashboard on Streamlit Community Cloud
 

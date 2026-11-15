@@ -10,9 +10,7 @@ from pathlib import Path
 NEEDED = [
     "data/train.csv",
     "data/stream_pool.csv",
-    "models/model_v1.joblib",
-    "models/reference_data.csv",
-    "models/model_v1_metrics.json",
+    "models/mlflow.db",  # the MLflow store holding model v1
     "logs/batch_log.csv",
     "logs/feature_drift.csv",
     "logs/batches.csv",

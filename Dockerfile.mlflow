@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+# The MLflow UI/server, for browsing the store that the API and dashboard write.
+# The app image only has mlflow-skinny (client); this one has the full package.
+# MLFLOW_VERSION must match mlflow-skinny in requirements-lock.txt, because the
+# server refuses a database schema from a different version (a test checks it).
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
+
+ARG MLFLOW_VERSION=3.18.0
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    MLFLOW_DISABLE_TELEMETRY=true \
+    DO_NOT_TRACK=true
+
+RUN pip install "mlflow==${MLFLOW_VERSION}" \
+    && useradd --create-home --uid 10001 app
+
+# same uid and same /app/models path as the app image, so the shared volume's
+# database and its absolute artifact paths resolve here too
+USER app
+WORKDIR /app
+EXPOSE 5000
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+    CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:5000/health', timeout=4).status == 200 else 1)"]
+
+CMD ["mlflow", "server", "--backend-store-uri", "sqlite:////app/models/mlflow.db", "--host", "0.0.0.0", "--port", "5000"]

@@ -1,9 +1,11 @@
-# The API and the dashboard share one volume for models/ and logs/, so a model
-# promoted in the dashboard is served by the API on its next request.
+# The API, the dashboard and the MLflow UI share one volume holding the MLflow
+# store (models/), so a model promoted in the dashboard is served by the API on
+# its next request and shows up in the MLflow UI.
 #   cp .env.example .env    # then set API_KEY
 #   docker compose up --build
 #   API:       http://localhost:8000/docs   (send X-API-Key)
 #   Dashboard: http://localhost:8501
+#   MLflow UI: http://localhost:5000        (runs, metrics, registered model versions)
 services:
   api:
     build:
@@ -33,6 +35,20 @@ services:
     volumes:
       - models:/app/models
       - logs:/app/logs
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile.mlflow
+    image: mlops-observatory-mlflow:latest
+    ports:
+      - "127.0.0.1:5000:5000"  # no login on the MLflow UI: keep it on this machine only
+    volumes:
+      - models:/app/models
     depends_on:
       api:
         condition: service_healthy
