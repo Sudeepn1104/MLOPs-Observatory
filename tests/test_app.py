@@ -42,4 +42,6 @@ def test_sandbox_isolates_visitors(trained, monkeypatch, tmp_path_factory):
     assert not alice.exception and not bob.exception
     assert alice.metric[0].value == "v2"
     assert bob.metric[0].value == "v1"
-    assert not Path("models/model_v2.joblib").exists()  # project dir untouched
+    import registry
+
+    assert registry.load_registry()["active"] == "v1"  # project registry untouched

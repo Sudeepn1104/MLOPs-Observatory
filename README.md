@@ -2,7 +2,7 @@
 
 A Streamlit dashboard that watches a credit-default model trained on **real data** (30,000 credit card clients), warns when **data drift** or a **performance drop** happens, retrains the model, and compares v1 against v2 before promoting it.
 
-Built from scratch with Python, pandas, scikit-learn, scipy, plotly, Streamlit and FastAPI. The drift tests (PSI and KS) are my own implementation, not a library.
+Built with Python, pandas, scikit-learn, MLflow, FastAPI, Streamlit, plotly and Docker. Experiments and the model registry run on MLflow. The drift tests (PSI and KS) are my own implementation, not a library.
 
 **Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/
 
@@ -46,6 +46,7 @@ In one sentence: it is a smoke detector for a credit model. It spots when the mo
 | Live drift injector (input drift and concept drift sliders) | Drift injector tab |
 | Stream new batches scored by the active model; "v2 takes over" marker | Monitoring tab |
 | Retrain button, auto-retrain, v1 vs v2 comparison, promotion check | Model registry tab |
+| Experiment tracking and model registry on MLflow (`champion` alias = model in production) | MLflow UI, Model registry tab |
 | Private sandbox per visitor on the live demo | Automatic on Streamlit Cloud |
 | Model card with data, limits and failure modes | Model card tab |
 | Downloadable drift report (CSV) | Monitoring tab |
@@ -55,6 +56,7 @@ In one sentence: it is a smoke detector for a credit model. It spots when the mo
 ![Overview: v1 under drift, status RED and retrain rule fired](screenshots/overview.png)
 ![Monitoring: drift heatmap and performance, v2 takes over at batch 10](screenshots/monitoring.png)
 ![Model registry: v1 vs v2 on the same recent holdout](screenshots/registry.png)
+![The same registry in the MLflow UI: version 2 holds the champion alias](screenshots/mlflow_registry.png)
 ![Silent failure: PSI green but AUC 0.40](screenshots/injector.png)
 
 ## Key finding: silent failure
@@ -64,12 +66,12 @@ When the data **inputs** shift, PSI turns red. When the **rule** that decides de
 ## How it works
 
 1. `make_data.py` loads the real dataset and splits it into 20,000 rows for training and 10,000 rows the model never trains on (the stream pool). `make_batch()` draws batches from the pool and can add input drift (resampling real clients, for example more older ones) and concept drift (a share of labels follows a different default rule).
-2. `train.py` trains RandomForest v1 (balanced class weights) and saves the model and its reference data.
+2. `train.py` trains RandomForest v1 (balanced class weights) and logs it to MLflow: parameters, metrics, the model and its reference data. It registers the model as version 1 and points the `champion` alias at it.
 3. `simulate.py` sends 10 batches of 500 clients with growing input drift. Concept drift starts at batch 4. It logs PSI, KS and metrics per batch.
 4. `drift.py` computes PSI and the KS test per feature.
 5. `monitor.py` applies the retrain rule to the active model, using only the batches it scored itself and its own baseline AUC. It also streams new batches, which keep the drifted conditions of batch 9 and are scored by the active model.
-6. `retrain.py` trains a challenger on the last 4 batches, tests both models on the same holdout, and promotes the challenger only if its AUC is at least as good.
-7. `registry.py` keeps a JSON record of every version with metrics and timestamps.
+6. `retrain.py` trains a challenger on the last 4 batches and tests both models on the same holdout. Every retrain is an MLflow run and a new registered version. The `champion` alias moves to it only if its AUC is at least as good; otherwise the version is recorded as rejected.
+7. `registry.py` is the only module that talks to MLflow. It stores runs and model versions in a SQLite MLflow store (`models/mlflow.db`), and saves models in the skops format, which cannot run code when loaded (unlike pickle). [docs/MLFLOW.md](docs/MLFLOW.md) explains the design.
 8. `workspace.py` gives each visitor of the live demo a private sandbox, so one person's Retrain or Reset doesn't change what others see. Locally everything stays in the project folder. Set `OBSERVATORY_SANDBOX=1` or `0` to force it on or off.
 9. `app.py` is the dashboard.
 
@@ -86,6 +88,13 @@ python -m streamlit run app.py
 ```
 
 Run `train.py` again to reset the registry to v1.
+
+To browse the runs and the registered model in the MLflow UI (http://localhost:5000):
+
+```
+pip install mlflow
+mlflow ui --backend-store-uri sqlite:///models/mlflow.db
+```
 
 ## Prediction API
 
@@ -112,7 +121,7 @@ uvicorn serve:app --port 8000
 curl -X POST localhost:8000/predict -H "X-API-Key: $API_KEY" -H 'content-type: application/json' -d '{"clients": [{"credit_limit": 50000, "age": 29, "education": 2, "marriage": 2, "repay_status_sep": 2, "repay_status_aug": 2, "repay_status_jul": 0, "bill_sep": 48000, "paid_sep": 0, "paid_aug": 1500}]}'
 ```
 
-Interactive docs are at `/docs`. Every response carries an `X-Request-ID`, and production logs are one JSON line per request. Every scored client is logged to SQLite (`logs/predictions.db`), and `/monitoring/drift` runs the same PSI check as the dashboard on that live traffic. That needs no labels, so it's the early warning in production, where true defaults arrive months later. When a retrain promotes a new version, the API picks it up on the next request without a restart.
+Interactive docs are at `/docs`. Every response carries an `X-Request-ID`, and production logs are one JSON line per request. Every scored client is logged to SQLite (`logs/predictions.db`), and `/monitoring/drift` runs the same PSI check as the dashboard on that live traffic. That needs no labels, so it's the early warning in production, where true defaults arrive months later. On every request the API asks the MLflow registry which version holds the `champion` alias, so when a retrain promotes a new version it is served on the next request without a restart.
 
 ## Docker
 
@@ -123,7 +132,7 @@ cp .env.example .env    # set API_KEY
 docker compose up --build
 ```
 
-This starts the API on http://localhost:8000/docs and the dashboard on http://localhost:8501. They share a volume, so a model you promote in the dashboard is served by the API on its next request. To run one service on its own:
+This starts the API on http://localhost:8000/docs, the dashboard on http://localhost:8501 and the MLflow UI on http://localhost:5000. They share a volume holding the MLflow store, so a model you promote in the dashboard is served by the API on its next request and appears in the MLflow UI. To run one service on its own:
 
 ```
 docker build -t observatory .
@@ -164,7 +173,7 @@ ruff check .
 python -m pytest
 ```
 
-The tests cover the prediction API (validation, logging, live drift, picking up a promoted model), the scheduled check, PSI and the KS check, the dataset (including its checksum) and batch sampler, the simulator, the registry and retraining, and a smoke test of the dashboard itself. GitHub Actions runs them on every push and pull request, on Python 3.11 with the oldest supported library versions and on Python 3.13 with the newest. It also audits the locked dependencies for known vulnerabilities, builds the Docker image and smoke-tests both containers. Releases are published to GitHub Container Registry with a vulnerability scan, an SBOM and build provenance (see [DEPLOY.md](DEPLOY.md)).
+The tests cover the prediction API (validation, logging, live drift, picking up a promoted model), the scheduled check, the MLflow registry (runs, promotion, rejection, reset, pickle-free model files), PSI and the KS check, the dataset (including its checksum) and batch sampler, the simulator, the registry and retraining, and a smoke test of the dashboard itself. GitHub Actions runs them on every push and pull request, on Python 3.11 with the oldest supported library versions and on Python 3.13 with the newest. It also audits the locked dependencies for known vulnerabilities, builds the Docker image and smoke-tests both containers. Releases are published to GitHub Container Registry with a vulnerability scan, an SBOM and build provenance (see [DEPLOY.md](DEPLOY.md)).
 
 ## Results
 

@@ -2,13 +2,13 @@ import gzip
 import hashlib
 from pathlib import Path
 
-import joblib
 import numpy as np
 import pandas as pd
 import pytest
 from sklearn.metrics import roc_auc_score
 
 import make_data
+import registry
 from drift import check_drift
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -78,7 +78,7 @@ def test_concept_drift_keeps_inputs_but_breaks_the_old_rule(pool):
     feats = pool.drop(columns="default")
     assert check_drift(feats, drifted.drop(columns="default"))["psi"].max() < 0.1
     # v1 learned the old rule: good on recorded labels, no better than chance on the new rule
-    v1 = joblib.load("models/model_v1.joblib")
+    v1 = registry.load_model(registry.load_registry()["models"][0])
 
     def auc(b):
         return roc_auc_score(b["default"], v1.predict_proba(b.drop(columns="default"))[:, 1])

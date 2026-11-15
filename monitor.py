@@ -10,9 +10,9 @@ batches yet, so there is nothing to judge until the next batch arrives.
 """
 from pathlib import Path
 
-import joblib
 import pandas as pd
 
+import registry
 from registry import get_active
 from simulate import draw_batch, score_batch
 
@@ -67,8 +67,8 @@ def stream_next(reg, root="."):
     i = int(log["batch"].max()) + 1
     batch, concept = draw_batch(i)
     active = get_active(reg)
-    model = joblib.load(active["file"])
-    ref = pd.read_csv(active["reference"])
+    model = registry.load_model(active)
+    ref = registry.load_reference(active)
     row, report = score_batch(model, ref, batch, i, active["version"], concept)
 
     _append(pd.DataFrame([row]), _stream_path(root, "batch_log"))

@@ -3,9 +3,10 @@
 Locally everything lives in the project directory, as before, so the scripts
 and the dashboard share one registry.
 
-On the live demo every visitor gets a private workspace (a temp directory), so
-one visitor's Retrain or Reset never changes what another visitor sees. Model
-v1, the data and the 10 history batches are shared and read-only.
+On the live demo every visitor gets a private workspace (a temp directory) with
+its own MLflow store, so one visitor's Retrain or Reset never changes what
+another visitor sees. Model v1 (linked, not copied), the data and the 10
+history batches are shared and read-only.
 
 Sandbox mode is on when OBSERVATORY_SANDBOX is "1"/"true", off when it is
 "0"/"false", and otherwise on only when running on Streamlit Community Cloud

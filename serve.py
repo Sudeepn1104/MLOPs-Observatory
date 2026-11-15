@@ -19,7 +19,7 @@ Configuration (environment variables)
   LOG_LEVEL           default INFO
   GIT_SHA             set at image build time, reported by /version
 
-The API always serves the registry's active model. When a retrain promotes a
+The API always serves the MLflow registry's champion model. When a retrain promotes a
 new version (from the dashboard or retrain.py), the next request picks it up:
 no restart needed. Every scored client is written to a SQLite log, which the
 drift endpoint compares with the model's reference data. That's the same PSI
@@ -38,7 +38,6 @@ from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-import joblib
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.responses import JSONResponse, Response
@@ -53,9 +52,10 @@ from prometheus_client import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
+import registry
 from drift import check_drift
 from make_data import FEATURE_NAMES
-from registry import get_active, load_registry, registry_path
+from registry import get_active, load_registry
 
 ROOT = Path(os.environ.get("OBSERVATORY_ROOT", "."))
 PREDICTION_LOG = Path(os.environ.get("PREDICTION_LOG", "logs/predictions.db"))
@@ -214,30 +214,38 @@ class PredictResponse(BaseModel):
 
 
 class ModelHolder:
-    """Keeps the active model in memory and reloads it when the registry changes."""
+    """Keeps the champion model in memory and swaps it when the champion changes.
+
+    Every call asks the MLflow registry which version the champion alias points
+    at (one small query). A different version, or the same version number from
+    a different run (after a reset), triggers a reload. If the registry can't
+    be read for a moment, the model already in memory keeps serving.
+    """
 
     def __init__(self, root):
         self.root = Path(root)
         self._lock = threading.Lock()
-        self._stamp = None
+        self._key = None
         self.entry = None
         self.model = None
         self.reference = None
 
-    def _registry_stamp(self):
-        path = registry_path(self.root)
-        return path.stat().st_mtime_ns if path.exists() else None
-
     def get(self):
-        stamp = self._registry_stamp()
-        if self.model is None or stamp != self._stamp:
+        try:
+            key = registry.champion_key(self.root)
+            entry = None if key == self._key else get_active(load_registry(self.root))
+        except Exception:
+            if self.model is None:
+                raise
+            log.exception("registry unavailable; serving the model already loaded")
+            return self.entry, self.model, self.reference
+        if key != self._key:
             with self._lock:
-                if self.model is None or stamp != self._stamp:
-                    entry = get_active(load_registry(self.root))
-                    self.model = joblib.load(entry["file"])
-                    self.reference = pd.read_csv(entry["reference"])
-                    self.entry = entry
-                    self._stamp = self._registry_stamp()
+                if key != self._key:
+                    model = registry.load_model(entry)
+                    reference = registry.load_reference(entry)
+                    self.entry, self.model, self.reference, self._key = entry, model, reference, key
+                    log.info("model loaded", extra={"fields": {"model_version": entry["version"]}})
         return self.entry, self.model, self.reference
 
 
@@ -300,7 +308,6 @@ async def lifespan(app):
     try:
         entry, _, _ = app.state.holder.get()  # load once at startup so /ready is true immediately
         app.state.metrics.set_active(entry["version"])
-        log.info("model loaded", extra={"fields": {"model_version": entry["version"]}})
     except Exception:  # keep serving /health; /ready reports the problem
         log.exception("model could not be loaded at startup")
     log.info(
@@ -409,6 +416,9 @@ def model_info():
         "version": entry["version"],
         "trained_at": entry["trained_at"],
         "trigger": entry["trigger"],
+        "mlflow_run_id": entry["run_id"],
+        "registered_model": registry.MODEL_NAME,
+        "alias": registry.ALIAS,
         "metrics": entry["metrics"],
         "evaluated_on": entry["evaluated_on"],
         "features": FEATURE_NAMES,

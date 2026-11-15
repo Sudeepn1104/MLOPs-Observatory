@@ -4,39 +4,25 @@ Champion/challenger rule: the new model is promoted only if its AUC on the
 same recent holdout is at least as good as the current active model's.
 The retrain rule itself (when to retrain) lives in monitor.py.
 """
-from datetime import datetime
 
-import joblib
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 
+import registry
 from make_data import TARGET
 from monitor import load_batches
-from registry import get_active, load_registry, models_dir, save_registry
-from train import build_model
+from train import MODEL_PARAMS, build_model, evaluate
 
 RECENT_BATCHES = 4  # how many of the latest batches to learn from
 
 
-def _metrics(model, X, y):
-    pred = model.predict(X)
-    proba = model.predict_proba(X)[:, 1]
-    return {
-        "accuracy": round(float(accuracy_score(y, pred)), 4),
-        "f1": round(float(f1_score(y, pred, zero_division=0)), 4),
-        "auc": round(float(roc_auc_score(y, proba)), 4),
-    }
-
-
 def retrain(trigger="manual", root="."):
-    """Trains a challenger, compares it with the active model, updates the registry.
+    """Trains a challenger, compares it with the champion, and registers it in MLflow.
 
     root is the workspace (see registry.py). Returns the new registry entry,
     including the champion-vs-challenger comparison.
     """
-    reg = load_registry(root)
-    champion = get_active(reg)
-    version = f"v{len(reg['models']) + 1}"
+    reg = registry.load_registry(root)
+    champion = registry.get_active(reg)
 
     data = load_batches(root)
     last = int(data["batch"].max())
@@ -48,39 +34,33 @@ def retrain(trigger="manual", root="."):
 
     challenger = build_model().fit(X_tr, y_tr)
 
-    champ_model = joblib.load(champion["file"])
-    champ_metrics = _metrics(champ_model, X_te, y_te)
-    new_metrics = _metrics(challenger, X_te, y_te)
+    champ_metrics = evaluate(registry.load_model(champion), X_te, y_te)
+    new_metrics = evaluate(challenger, X_te, y_te)
     promoted = new_metrics["auc"] >= champ_metrics["auc"]
 
-    folder = models_dir(root)
-    folder.mkdir(parents=True, exist_ok=True)
-    model_file = str(folder / f"model_{version}.joblib")
-    ref_file = str(folder / f"reference_{version}.csv")
-    joblib.dump(challenger, model_file)
-    X_tr.to_csv(ref_file, index=False)  # new drift baseline for this version
-
-    entry = {
-        "version": version,
-        "status": "active" if promoted else "rejected",
-        "file": model_file,
-        "reference": ref_file,
-        "trained_at": datetime.now().isoformat(timespec="seconds"),
-        "trigger": trigger,
-        "train_rows": int(len(X_tr)),
-        "data_until_batch": last,
-        "evaluated_on": f"recent holdout ({len(X_te)} rows, batches {last - RECENT_BATCHES + 1}-{last})",
-        "metrics": new_metrics,
-        "compared_with": champion["version"],
-        "champion_metrics_on_holdout": champ_metrics,
-        "promoted": bool(promoted),
-    }
-    if promoted:
-        champion["status"] = "archived"
-        reg["active"] = version
-    reg["models"].append(entry)
-    save_registry(reg, root)
-    return entry
+    # one MLflow run per retrain; the champion alias moves only if promoted
+    return registry.register_version(
+        challenger,
+        X_tr,
+        {
+            "trigger": trigger,
+            "train_rows": int(len(X_tr)),
+            "data_until_batch": last,
+            "evaluated_on": f"recent holdout ({len(X_te)} rows, batches {last - RECENT_BATCHES + 1}-{last})",
+            "metrics": new_metrics,
+            "compared_with": champion["version"],
+            "champion_metrics_on_holdout": champ_metrics,
+            "promoted": bool(promoted),
+        },
+        params={
+            "model_type": type(challenger).__name__, **MODEL_PARAMS,
+            "train_rows": len(X_tr), "holdout_rows": len(X_te),
+            "batches": f"{last - RECENT_BATCHES + 1}-{last}", "compared_with": champion["version"],
+        },
+        promote=bool(promoted),
+        root=root,
+        run_name=f"challenger vs {champion['version']}",
+    )
 
 
 if __name__ == "__main__":

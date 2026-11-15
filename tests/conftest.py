@@ -6,7 +6,6 @@ fresh directory and builds a small v1 model there. Nothing in the repo is touche
 import sys
 from pathlib import Path
 
-import joblib
 import pandas as pd
 import pytest
 from sklearn.ensemble import RandomForestClassifier
@@ -24,14 +23,29 @@ def workdir(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(scope="session")
+def empty_mlflow_db(tmp_path_factory):
+    """A migrated but empty MLflow database, built once.
+
+    Creating one runs every schema migration (over a second). It holds no
+    paths, so each test can start from a copy instead.
+    """
+    import registry
+
+    root = tmp_path_factory.mktemp("mlflow-template")
+    registry.store_dir(root).mkdir()
+    registry.client(root).search_registered_models()
+    return registry.db_path(root)
+
+
 @pytest.fixture
-def trained(workdir):
+def trained(workdir, empty_mlflow_db):
     """A small but real v1: data split, model, reference, metrics and simulated logs."""
-    import json
     import shutil
 
     import make_data
     import simulate
+    import train
 
     Path("data").mkdir()
     shutil.copy(ROOT / "data" / "credit_default_raw.csv.gz", "data/")
@@ -39,13 +53,10 @@ def trained(workdir):
     df = pd.read_csv(make_data.TRAIN)
     X, y = df.drop(columns=[make_data.TARGET]), df[make_data.TARGET]
     Path("models").mkdir()
+    shutil.copy(empty_mlflow_db, "models/mlflow.db")
     model = RandomForestClassifier(
         n_estimators=30, max_depth=6, class_weight="balanced", random_state=0
     ).fit(X, y)
-    joblib.dump(model, "models/model_v1.joblib")
-    X.to_csv("models/reference_data.csv", index=False)
-    Path("models/model_v1_metrics.json").write_text(
-        json.dumps({"accuracy": 0.77, "f1": 0.5, "auc": 0.76})
-    )
+    train.register_v1(model, X, {"accuracy": 0.77, "f1": 0.5, "auc": 0.76}, {"n_estimators": 30})
     simulate.run()
     return workdir
