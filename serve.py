@@ -8,7 +8,7 @@ Endpoints (* = needs the X-API-Key header when a key is configured)
   GET  /ready             readiness: the active model is loaded
   GET  /version           app version, git commit, active model
   GET  /model           * active version, metrics, features
-  POST /predict         * score one or more clients
+  POST /predict         * score one or more clients (?explain=true adds SHAP reasons)
   GET  /monitoring/drift * PSI of recent requests vs the active model's training data
   GET  /metrics         * Prometheus metrics
 
@@ -52,6 +52,7 @@ from prometheus_client import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
+import model as mdl
 import registry
 from drift import check_drift
 from make_data import FEATURE_NAMES
@@ -59,7 +60,6 @@ from registry import get_active, load_registry
 
 ROOT = Path(os.environ.get("OBSERVATORY_ROOT", "."))
 PREDICTION_LOG = Path(os.environ.get("PREDICTION_LOG", "logs/predictions.db"))
-THRESHOLD = 0.5
 MAX_BATCH = 1000
 MIN_DRIFT_ROWS = 50
 APP_VERSION = "1.1.0"
@@ -201,15 +201,29 @@ class PredictRequest(BaseModel):
     clients: list[Client] = Field(min_length=1, max_length=MAX_BATCH)
 
 
+class Reason(BaseModel):
+    feature: str
+    value: float
+    contribution: float = Field(
+        description="SHAP value in log-odds: positive pushes towards default, negative away from it"
+    )
+
+
 class Prediction(BaseModel):
-    default_probability: float
-    default: bool
+    default_probability: float = Field(description="Calibrated probability of default next month")
+    default: bool = Field(description="The decision: probability at or above the model's threshold")
+    reasons: list[Reason] | None = Field(
+        None, description="With ?explain=true: every feature's contribution, largest effect first"
+    )
 
 
 class PredictResponse(BaseModel):
     request_id: str
     model_version: str
-    threshold: float
+    threshold: float = Field(description="Decision threshold of this model version, tuned by CV for F1")
+    base_log_odds: float | None = Field(
+        None, description="With ?explain=true: the model's average log-odds, before any feature's effect"
+    )
     predictions: list[Prediction]
 
 
@@ -229,6 +243,7 @@ class ModelHolder:
         self.entry = None
         self.model = None
         self.reference = None
+        self._explainer = None
 
     def get(self):
         try:
@@ -247,6 +262,13 @@ class ModelHolder:
                     self.entry, self.model, self.reference, self._key = entry, model, reference, key
                     log.info("model loaded", extra={"fields": {"model_version": entry["version"]}})
         return self.entry, self.model, self.reference
+
+    def explainer(self):
+        """SHAP explainer for the loaded model, built on first use."""
+        model = self.model
+        if self._explainer is None or self._explainer[0] is not model:
+            self._explainer = (model, mdl.explainer(model))
+        return self._explainer[1]
 
 
 class PredictionLog:
@@ -422,28 +444,45 @@ def model_info():
         "metrics": entry["metrics"],
         "evaluated_on": entry["evaluated_on"],
         "features": FEATURE_NAMES,
-        "threshold": THRESHOLD,
+        "threshold": mdl.threshold(app.state.holder.get()[1]),
     }
 
 
 @app.post("/predict", response_model=PredictResponse, dependencies=protected)
-def predict(req: PredictRequest, request: Request):
+def predict(
+    req: PredictRequest,
+    request: Request,
+    explain: bool = Query(False, description="Add each feature's SHAP contribution to every prediction"),
+):
     entry, model, _ = app.state.holder.get()
     app.state.metrics.set_active(entry["version"])
     clients = [c.model_dump() for c in req.clients]
     X = pd.DataFrame(clients, columns=FEATURE_NAMES)
     proba = model.predict_proba(X)[:, 1]
+    decisions = model.predict(X).astype(bool)
+    threshold = mdl.threshold(model)
     request_id = request.state.request_id
     app.state.log.write(request_id, entry["version"], clients, proba)
     app.state.metrics.predictions.labels(entry["version"]).inc(len(clients))
-    app.state.metrics.predicted_defaults.labels(entry["version"]).inc(int((proba >= THRESHOLD).sum()))
+    app.state.metrics.predicted_defaults.labels(entry["version"]).inc(int(decisions.sum()))
+    reasons, base = [None] * len(clients), None
+    if explain:
+        contrib, base = mdl.contributions(model, X, app.state.holder.explainer())
+        reasons = [
+            [
+                Reason(feature=f, value=float(X.iloc[i][f]), contribution=round(float(c), 4))
+                for f, c in row.sort_values(key=abs, ascending=False).items()
+            ]
+            for i, (_, row) in enumerate(contrib.iterrows())
+        ]
     return PredictResponse(
         request_id=request_id,
         model_version=entry["version"],
-        threshold=THRESHOLD,
+        threshold=round(threshold, 4),
+        base_log_odds=None if base is None else round(base, 4),
         predictions=[
-            Prediction(default_probability=round(float(p), 4), default=bool(p >= THRESHOLD))
-            for p in proba
+            Prediction(default_probability=round(float(p), 4), default=bool(d), reasons=r)
+            for p, d, r in zip(proba, decisions, reasons, strict=True)
         ],
     )
 
