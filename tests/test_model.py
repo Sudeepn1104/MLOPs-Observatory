@@ -79,3 +79,15 @@ def test_shap_contributions_add_up_to_the_prediction(v1, data):
 def test_v1_run_holds_evaluation_artifacts(trained):
     entry = registry.get_active(registry.load_registry())
     assert registry.load_artifact(entry, "missing.csv") is None
+
+
+def test_training_stays_in_one_process_by_default(monkeypatch):
+    """Regression: n_jobs=-1 spawned a worker per core (1.3 GB) and crashed the hosted demo."""
+    import bootstrap
+
+    assert mdl.N_JOBS == 1
+    assert mdl.build_model().n_jobs == 1
+    calls = []
+    monkeypatch.setattr(bootstrap.subprocess, "run", lambda cmd, **kw: calls.append(cmd[1:]))
+    bootstrap.build_all()
+    assert ["train.py", "--no-tune"] in calls  # no hyperparameter search at app start-up
