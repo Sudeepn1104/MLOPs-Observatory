@@ -2,7 +2,7 @@
 # breaking release can't silently break the live demo. CI tests the range.
 numpy>=2.0,<3
 pandas>=2.2.2,<4
-scikit-learn>=1.5,<2
+scikit-learn>=1.4.2,<2
 scipy>=1.13,<2
 joblib>=1.3,<2
 streamlit>=1.50,<2
@@ -13,5 +13,3 @@ mlflow-skinny>=3.10,<4
 sqlalchemy>=2.0.30,<3
 alembic>=1.13,<2
 skops>=0.12,<1
-# SHAP explanations (TreeExplainer); recent versions no longer need numba
-shap>=0.48,<1

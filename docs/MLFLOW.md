@@ -51,7 +51,7 @@ An **alias** is a movable name tag on one version. This project uses a single al
 
 ## Trade-offs
 
-- **Memory:** an API worker went from about 205 MB to about 320 MB, mostly the MLflow client and SQLAlchemy.
+- **Memory:** an API worker went from about 205 MB to about 330 MB, mostly the MLflow client and SQLAlchemy.
 - **Start-up:** creating a new store runs MLflow's database migrations (about a second). A new visitor's first page load pays that once.
 - **Telemetry:** MLflow sends anonymous usage data by default. This project turns it off (`MLFLOW_DISABLE_TELEMETRY`, `DO_NOT_TRACK`).
 - **The MLflow UI has no login.** Docker Compose binds it to your machine only.

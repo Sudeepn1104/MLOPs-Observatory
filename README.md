@@ -2,7 +2,7 @@
 
 A Streamlit dashboard that watches a credit-default model trained on **real data** (30,000 credit card clients), warns when **data drift** or a **performance drop** happens, retrains the model, and compares v1 against v2 before promoting it.
 
-Built with Python, pandas, scikit-learn, SHAP, MLflow, FastAPI, Streamlit, plotly and Docker. Experiments and the model registry run on MLflow. The drift tests (PSI and KS) are my own implementation, not a library.
+Built with Python, pandas, scikit-learn, MLflow, FastAPI, Streamlit, plotly and Docker. Experiments and the model registry run on MLflow. The drift tests (PSI and KS) are my own implementation, not a library.
 
 **Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/
 
@@ -48,8 +48,7 @@ In one sentence: it is a smoke detector for a credit model. It spots when the mo
 | Retrain button, auto-retrain, v1 vs v2 comparison, promotion check | Model registry tab |
 | Experiment tracking and model registry on MLflow (`champion` alias = model in production) | MLflow UI, Model registry tab |
 | Private sandbox per visitor on the live demo | Automatic on Streamlit Cloud |
-| Explanations: why the model flags a client (SHAP), and what it relies on overall | Explain tab, `POST /predict?explain=true` |
-| Model card with data, calibration, fairness across age groups, limits and failure modes | Model card tab |
+| Model card with data, limits and failure modes | Model card tab |
 | Downloadable drift report (CSV) | Monitoring tab |
 
 ## Screenshots
@@ -59,8 +58,6 @@ In one sentence: it is a smoke detector for a credit model. It spots when the mo
 ![Model registry: v1 vs v2 on the same recent holdout](screenshots/registry.png)
 ![The same registry in the MLflow UI: version 2 holds the champion alias](screenshots/mlflow_registry.png)
 ![Silent failure: PSI green but AUC 0.40](screenshots/injector.png)
-![Explain: a client 2 months late is flagged at 70% risk; SHAP shows repayment status drives it](screenshots/explain.png)
-![Model card: calibration plot and fairness across age groups](screenshots/model_card.png)
 
 ## Key finding: silent failure
 
@@ -69,7 +66,7 @@ When the data **inputs** shift, PSI turns red. When the **rule** that decides de
 ## How it works
 
 1. `make_data.py` loads the real dataset and splits it into 20,000 rows for training and 10,000 rows the model never trains on (the stream pool). `make_batch()` draws batches from the pool and can add input drift (resampling real clients, for example more older ones) and concept drift (a share of labels follows a different default rule).
-2. `train.py` tunes a gradient-boosting model with a 5-fold cross-validated search, tunes its decision threshold, and evaluates it on a held-out test split: ranking, calibration and fairness across age groups. It logs everything to MLflow (each search candidate is a child run), registers the model as version 1 and points the `champion` alias at it. `model.py` holds the modelling code; [docs/MODEL.md](docs/MODEL.md) explains the choices.
+2. `train.py` trains RandomForest v1 (balanced class weights) and logs it to MLflow: parameters, metrics, the model and its reference data. It registers the model as version 1 and points the `champion` alias at it.
 3. `simulate.py` sends 10 batches of 500 clients with growing input drift. Concept drift starts at batch 4. It logs PSI, KS and metrics per batch.
 4. `drift.py` computes PSI and the KS test per feature.
 5. `monitor.py` applies the retrain rule to the active model, using only the batches it scored itself and its own baseline AUC. It also streams new batches, which keep the drifted conditions of batch 9 and are scored by the active model.
@@ -124,7 +121,7 @@ uvicorn serve:app --port 8000
 curl -X POST localhost:8000/predict -H "X-API-Key: $API_KEY" -H 'content-type: application/json' -d '{"clients": [{"credit_limit": 50000, "age": 29, "education": 2, "marriage": 2, "repay_status_sep": 2, "repay_status_aug": 2, "repay_status_jul": 0, "bill_sep": 48000, "paid_sep": 0, "paid_aug": 1500}]}'
 ```
 
-Add `?explain=true` to get, for every client, each feature's SHAP contribution in log-odds, largest first; they add up to the prediction. The `default` decision uses the model version's own tuned threshold, which the response reports. Interactive docs are at `/docs`. Every response carries an `X-Request-ID`, and production logs are one JSON line per request. Every scored client is logged to SQLite (`logs/predictions.db`), and `/monitoring/drift` runs the same PSI check as the dashboard on that live traffic. That needs no labels, so it's the early warning in production, where true defaults arrive months later. On every request the API asks the MLflow registry which version holds the `champion` alias, so when a retrain promotes a new version it is served on the next request without a restart.
+Interactive docs are at `/docs`. Every response carries an `X-Request-ID`, and production logs are one JSON line per request. Every scored client is logged to SQLite (`logs/predictions.db`), and `/monitoring/drift` runs the same PSI check as the dashboard on that live traffic. That needs no labels, so it's the early warning in production, where true defaults arrive months later. On every request the API asks the MLflow registry which version holds the `champion` alias, so when a retrain promotes a new version it is served on the next request without a restart.
 
 ## Docker
 
@@ -183,35 +180,12 @@ The tests cover the prediction API (validation, logging, live drift, picking up 
 | | Batch 0 | Batch 9 (drifted) |
 |---|---|---|
 | AUC (v1) | 0.81 | 0.43 |
-| F1 (v1) | 0.62 | 0.15 |
+| F1 (v1) | 0.60 | 0.17 |
 | Max PSI | 0.03 | 1.58 |
 
-v1 scores AUC 0.77, F1 0.52 and a calibration error of 0.01 on its own test split: when it says 25%, about 25% of those clients default. Batches are only 500 rows, so batch AUC moves about ±0.03 from noise alone.
+v1 scores AUC 0.77 and F1 0.53 on its own test split. Batches are only 500 rows, so batch AUC moves about ±0.03 from noise alone.
 
-After retraining on recent data, v2 reaches AUC 0.69 on the same recent holdout where v1 scores 0.58. On the next three streamed batches v2 scores AUC 0.70 to 0.71 with every feature green again, so the alarm clears.
-
-### Choosing the model
-
-`python compare_models.py` runs every candidate through the same cross-validation, test split and threshold tuning, and logs them to MLflow:
-
-| Model | CV AUC | Calibration error | F1 (tuned threshold) | Size | 1-row latency |
-|---|---|---|---|---|---|
-| Logistic regression | 0.717 | 0.241 | 0.503 | tiny | fast |
-| RandomForest, balanced weights (previous) | 0.770 | 0.213 | 0.534 | 5.4 MB | ~47 ms |
-| RandomForest + isotonic calibration | 0.771 | 0.017 | 0.534 | larger | slower |
-| **Gradient boosting (current)** | **0.773** | **0.012** | 0.522 | **0.06 MB** | **~1 ms** |
-
-All three tree models rank clients equally well: the differences are inside the cross-validation noise (±0.013), so the ceiling is the information in these 10 features. Gradient boosting was chosen because it is calibrated without an extra layer, its SHAP explanations describe the probability actually served, and it is about 90 times smaller and much faster to serve. Tuning the hyperparameters made no measurable difference; that's reported, not hidden.
-
-### Fairness across age groups (v1, test split)
-
-| Check | Result |
-|---|---|
-| Selection-rate ratio (four-fifths rule, ≥ 0.8) | 0.77, fails |
-| Recall gap between groups (≤ 0.1) | 0.05, passes |
-| Calibration gap within groups (≤ 0.05) | 0.01, passes |
-
-The model flags each age group at roughly its real default rate (30–39-year-olds default least and are flagged least). When real rates differ, a model that is calibrated within every group can't also flag every group at the same rate, so these checks can't all pass. The previous model passed the four-fifths check only by over-flagging everyone (its predicted risk was about 0.45 for every group against real rates of 0.19 to 0.24). Which criterion should win is a policy and legal decision; the model card shows all three.
+After retraining on recent data, v2 reaches AUC 0.67 on the same recent holdout where v1 scores 0.58. On the next three streamed batches v2 scores AUC 0.70 to 0.72 with every feature green again, so the alarm clears.
 
 ## Data
 
@@ -221,9 +195,7 @@ The UCI [Default of Credit Card Clients](https://doi.org/10.24432/C55S3H) datase
 
 - The clients and their default labels are real, but the drift is simulated on top: input drift by resampling real clients, concept drift by relabelling with a different rule. The dataset has no real drift over time to replay.
 - The data is from Taiwan in 2005. Today's credit behaviour can differ a lot.
-- Baseline AUC is about 0.77, a moderate model; different algorithms don't move it (see Choosing the model).
-- The decision threshold is tuned for F1, which treats a missed defaulter and a false alarm as equally costly. A lender would set it from the real cost of each.
-- Age is a feature, and the four-fifths check across age groups fails (see Fairness). Using this for real decisions would need a legal review.
+- Baseline AUC is about 0.77, a moderate model. Accuracy is below the 78% you'd get by predicting "no default" for everyone, because balanced class weights trade accuracy for catching more defaulters.
 - Performance metrics need true labels, which arrive late for real credit.
 - Details are in the Model card tab.
 

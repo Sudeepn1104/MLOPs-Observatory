@@ -5,14 +5,12 @@ Needs: python make_data.py, python train.py, python simulate.py first.
 """
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
-import model as mdl
 import registry
 from bootstrap import build_all, missing_files
 from drift import check_drift
@@ -23,7 +21,6 @@ from monitor import (
     RULE_WINDOW,
     can_auto_retrain,
     evaluate,
-    load_batches,
     load_logs,
     reset_stream,
     stream_next,
@@ -112,8 +109,8 @@ st.caption(
     "Watches a credit-default model, trained on real client data, for data drift and performance drop."
 )
 
-tab_monitor, tab_inject, tab_explain, tab_registry, tab_card = st.tabs(
-    ["Monitoring", "Drift injector (live demo)", "Explain", "Model registry", "Model card"]
+tab_monitor, tab_inject, tab_registry, tab_card = st.tabs(
+    ["Monitoring", "Drift injector (live demo)", "Model registry", "Model card"]
 )
 
 # =====================================================
@@ -322,69 +319,6 @@ with tab_inject:
         )
 
 # =====================================================
-# TAB: explain predictions with SHAP
-# =====================================================
-@st.cache_resource(max_entries=8)
-def get_explainer(model_uri):
-    return mdl.explainer(load_model(model_uri))
-
-
-@st.cache_data(max_entries=8)
-def global_importance(model_uri, reference_uri):
-    sample = load_reference(reference_uri).sample(1000, random_state=0)
-    imp = mdl.global_importance(load_model(model_uri), sample, get_explainer(model_uri))
-    return imp.rename("mean |SHAP|").reset_index().rename(columns={"index": "feature"})
-
-
-with tab_explain:
-    st.write(
-        f"Why does **{active['version']}** flag a client? SHAP splits each prediction into one "
-        "contribution per feature, in log-odds: positive pushes towards default, negative "
-        "away from it. They add up exactly to the model's output."
-    )
-    left, right = st.columns([2, 3])
-    with left:
-        st.subheader("What the model relies on")
-        imp = global_importance(active["model_uri"], active["reference_uri"])
-        fig_imp = px.bar(imp.iloc[::-1], x="mean |SHAP|", y="feature", orientation="h")
-        fig_imp.update_layout(height=380, margin={"t": 10, "b": 10}, yaxis_title=None)
-        st.plotly_chart(fig_imp, width="stretch")
-        st.caption("Mean absolute contribution over 1,000 training clients.")
-
-    with right:
-        st.subheader("Explain one client")
-        batches = load_batches(root)
-        last_batch = int(batches["batch"].max())
-        e1, e2 = st.columns(2)
-        b_pick = e1.number_input("Batch", 0, last_batch, last_batch)
-        rows = batches[batches["batch"] == b_pick].reset_index(drop=True)
-        i_pick = e2.number_input("Client in batch", 0, len(rows) - 1, 0)
-        client = rows.drop(columns=[TARGET, "batch"]).iloc[[int(i_pick)]]
-        proba = float(model.predict_proba(client)[0, 1])
-        flagged = bool(model.predict(client)[0])
-        contrib, base = mdl.contributions(model, client, get_explainer(active["model_uri"]))
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Probability of default", f"{proba:.1%}")
-        k2.metric(f"Decision (threshold {mdl.threshold(model):.0%})", "🔴 flag" if flagged else "🟢 approve")
-        k3.metric("Actually defaulted", "yes" if int(rows.loc[int(i_pick), TARGET]) else "no")
-        c = contrib.iloc[0].sort_values(key=abs)
-        values = client.iloc[0]
-        fig_c = go.Figure(go.Bar(
-            x=c.values, y=[f"{f} = {values[f]:g}" for f in c.index], orientation="h",
-            marker_color=["#d64545" if v > 0 else "#2e9e5b" for v in c.values],
-            hovertemplate="%{x:+.3f} log-odds<extra></extra>",
-        ))
-        fig_c.update_layout(height=380, margin={"t": 10, "b": 10},
-                            xaxis_title="Contribution (log-odds; red raises risk, green lowers it)")
-        st.plotly_chart(fig_c, width="stretch")
-        st.caption(
-            f"Average client: log-odds {base:+.2f}. Plus these contributions: "
-            f"{base + c.sum():+.2f}, which is a probability of "
-            f"{1 / (1 + np.exp(-(base + c.sum()))):.1%} before the threshold step."
-        )
-
-
-# =====================================================
 # TAB 3: model registry, retrain, v1 vs v2
 # =====================================================
 with tab_registry:
@@ -421,7 +355,6 @@ with tab_registry:
                 "accuracy": m["metrics"]["accuracy"],
                 "f1": m["metrics"]["f1"],
                 "auc": m["metrics"]["auc"],
-                "threshold": m["metrics"].get("threshold"),
                 "evaluated_on": m["evaluated_on"],
                 "mlflow_run": (m.get("run_id") or "")[:8],
             }
@@ -470,20 +403,16 @@ with tab_card:
 
     st.subheader("Overview")
     st.write(
-        "A gradient-boosting classifier (scikit-learn's HistGradientBoostingClassifier, "
-        "hyperparameters tuned by 5-fold cross-validation) that predicts whether a credit "
-        "card client will default on next month's payment. It outputs a calibrated "
-        "probability, and flags a client when that probability reaches a decision threshold "
-        "tuned for F1. Built to demonstrate monitoring, drift detection and retraining, not "
-        "to make real lending decisions."
+        "A RandomForest classifier (200 trees, max depth 8, balanced class weights) that "
+        "predicts whether a credit card client will default on next month's payment. "
+        "Built to demonstrate monitoring, drift detection and retraining, not to make "
+        "real lending decisions."
     )
-    am = active["metrics"]
-    o1, o2, o3, o4, o5 = st.columns(5)
+    o1, o2, o3, o4 = st.columns(4)
     o1.metric("Version", active["version"])
     o2.metric("Trained on", active["trained_at"][:10])
-    o3.metric("AUC", f"{am['auc']:.3f}")
-    o4.metric("F1", f"{am['f1']:.3f}")
-    o5.metric("Decision threshold", f"{am['threshold']:.2f}" if "threshold" in am else "0.50")
+    o3.metric("AUC", f"{active['metrics']['auc']:.3f}")
+    o4.metric("F1", f"{active['metrics']['f1']:.3f}")
     st.caption(f"Metrics measured on: {active['evaluated_on']}. Trigger: {active['trigger']}.")
 
     st.subheader("Data")
@@ -526,64 +455,12 @@ with tab_card:
         "format, which cannot run code when loaded (unlike pickle)."
     )
 
-    st.subheader("Calibration: can the probabilities be trusted?")
-    calib = registry.load_artifact(active, "calibration.csv")
-    if "ece" in am:
-        c1, c2 = st.columns([1, 2])
-        c1.metric("Calibration error (ECE)", f"{am['ece']:.3f}")
-        c1.metric("Brier score", f"{am['brier']:.3f}")
-        c1.caption(
-            "ECE is the average gap between the predicted default rate and the real one. "
-            "The earlier RandomForest with balanced class weights scored 0.21: its '45%' "
-            "meant about 22%."
-        )
-        if calib is not None:
-            figc = go.Figure()
-            figc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="perfect",
-                                      line={"dash": "dot", "color": "#888"}))
-            figc.add_trace(go.Scatter(
-                x=calib["predicted"], y=calib["observed"], mode="lines+markers",
-                name=active["version"], text=calib["n"],
-                hovertemplate="predicted %{x:.2f}<br>observed %{y:.2f}<br>%{text} clients",
-            ))
-            figc.update_layout(xaxis_title="Predicted probability of default",
-                               yaxis_title="Observed default rate", height=320,
-                               margin={"t": 10, "b": 10}, xaxis_range=[0, 1], yaxis_range=[0, 1])
-            c2.plotly_chart(figc, width="stretch")
-
-    st.subheader("Fairness across age groups")
-    fair = registry.load_artifact(active, "fairness.csv")
-    fsum = registry.load_artifact(active, "fairness_summary.json")
-    if fair is not None and fsum is not None:
-        f1_, f2_, f3_ = st.columns(3)
-        mark = lambda ok: "✅" if ok else "❌"  # noqa: E731
-        f1_.metric(f"{mark(fsum['passes_four_fifths'])} Selection-rate ratio (≥ 0.8)",
-                   f"{fsum['selection_rate_ratio']:.2f}")
-        f2_.metric(f"{mark(fsum['passes_equal_opportunity'])} Recall gap (≤ 0.1)", f"{fsum['tpr_gap']:.3f}")
-        if "calibration_gap" in fsum:
-            f3_.metric(f"{mark(fsum['calibrated_within_groups'])} Calibration gap (≤ 0.05)",
-                       f"{fsum['calibration_gap']:.3f}")
-        st.dataframe(fair, hide_index=True, width="stretch")
-        st.caption(
-            "Measured on the same data as the metrics above. Selection rate is the share of a "
-            "group flagged as likely to default; recall is the share of real defaulters "
-            "caught. When real default rates differ between groups, a model that is "
-            "calibrated within each group flags each group at its own rate, so the "
-            "four-fifths check can fail while recall and calibration are even. These "
-            "criteria can't all hold at once; which matters most is a policy and legal "
-            "decision, not a modelling one."
-        )
-    else:
-        st.info("This version has no fairness report.")
-
     st.subheader("Known limits and failure modes")
     st.markdown(
-        "- **Moderate ceiling.** Test AUC is about 0.77. RandomForest, logistic regression "
-        "and gradient boosting all land within 0.01 AUC of each other, so the limit is the "
-        "information in these 10 features, not the algorithm.\n"
-        "- **The threshold is a business choice.** It's tuned for F1, which treats a missed "
-        "defaulter and a false alarm as equally bad. A lender would set it from the real "
-        "cost of each.\n"
+        "- **Moderate baseline.** Test AUC is about 0.77. Accuracy (about 0.77) is below "
+        "what predicting 'no default' for everyone would score (78%), because balanced "
+        "class weights trade accuracy for catching more real defaulters. Watch AUC and "
+        "F1, not accuracy.\n"
         "- **Old data from one market.** Taiwan, 2005. Credit behaviour today, or "
         "elsewhere, can differ a lot.\n"
         "- **Silent failure under concept drift.** If the default rule changes but the "
@@ -597,9 +474,8 @@ with tab_card:
         "lucky holdout.\n"
         "- **PSI limits.** PSI is sensitive to bin choice and to batch size (500 rows "
         "here), and it checks one feature at a time, so it misses joint shifts.\n"
-        "- **Age is a feature.** The fairness section shows how outcomes differ by age. "
-        "Whether age may be used at all depends on the jurisdiction; a real credit model "
-        "would need a legal review."
+        "- **Fairness not assessed.** Age is a feature. A real credit model would need "
+        "a fairness and legal review before use."
     )
 
     st.subheader("Version history")

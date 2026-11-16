@@ -17,16 +17,14 @@ def test_v1_is_registered_as_champion(trained):
     assert reg["active"] == "v1" and len(reg["models"]) == 1
     v1 = registry.get_active(reg)
     assert v1["status"] == "active" and v1["trigger"] == "initial training"
-    assert 0.5 < v1["metrics"]["auc"] <= 1
+    assert v1["metrics"]["auc"] == 0.76
     # the same facts, read straight from MLflow
     c = mlflow_client()
     champion = c.get_model_version_by_alias(registry.MODEL_NAME, registry.ALIAS)
     assert champion.version in (1, "1") and champion.run_id == v1["run_id"]
     run = c.get_run(v1["run_id"])
-    assert run.data.metrics["auc"] == v1["metrics"]["auc"]
-    assert run.data.metrics["threshold"] == v1["metrics"]["threshold"]
-    assert run.data.params["model_type"] == "HistGradientBoostingClassifier"
-    assert v1["model_params"]["max_iter"] == 60  # stored, so retraining can reuse them
+    assert run.data.metrics["auc"] == 0.76
+    assert run.data.params["model_type"] == "RandomForestClassifier"
     assert run.info.status == "FINISHED"
 
 
@@ -73,10 +71,10 @@ def test_retrain_logs_a_run_and_promotes(trained):
 
 
 def test_rejected_challenger_is_recorded_but_not_promoted(trained, monkeypatch):
-    import model as mdl
+    import retrain as retrain_module
 
     monkeypatch.setattr(  # make the challenger lose
-        mdl, "evaluate",
+        retrain_module, "evaluate",
         lambda model, X, y: {"accuracy": 0.5, "f1": 0.1, "auc": 0.9 if hasattr(model, "_champ") else 0.5},
     )
     real_load = registry.load_model
