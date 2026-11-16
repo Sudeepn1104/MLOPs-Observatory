@@ -44,6 +44,8 @@ from mlflow.exceptions import MlflowException  # noqa: E402
 from mlflow.models import infer_signature  # noqa: E402
 from mlflow.tracking import MlflowClient  # noqa: E402
 
+import model as _model  # noqa: E402, F401 - importing it caps OpenMP threads in every process that loads a model
+
 MODEL_NAME = "credit-default"
 EXPERIMENT = "credit-default"
 ALIAS = "champion"

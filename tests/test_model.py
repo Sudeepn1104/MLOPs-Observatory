@@ -91,3 +91,24 @@ def test_training_stays_in_one_process_by_default(monkeypatch):
     monkeypatch.setattr(bootstrap.subprocess, "run", lambda cmd, **kw: calls.append(cmd[1:]))
     bootstrap.build_all()
     assert ["train.py", "--no-tune"] in calls  # no hyperparameter search at app start-up
+
+
+def test_openmp_threads_are_capped_in_every_process_that_loads_models():
+    """Regression: on a host showing 64 cores with ~1 usable, a retrain took 108 s instead of 4 s."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import registry\n"
+        "from threadpoolctl import threadpool_info\n"
+        "print(max(i['num_threads'] for i in threadpool_info() if i['user_api'] == 'openmp'))\n"
+    )
+    env = {**os.environ, "OMP_NUM_THREADS": "64"}
+    env.pop("OBSERVATORY_THREADS", None)
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True,
+        cwd=Path(__file__).resolve().parent.parent,
+    )
+    assert out.stdout.strip().splitlines()[-1] == str(mdl.MAX_THREADS) == "2", out.stderr[-500:]

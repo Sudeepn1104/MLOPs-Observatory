@@ -80,6 +80,16 @@ This is a known result: when base rates differ, calibration within groups and eq
 
 Also worth saying: the 50+ group has only 336 test clients, so its numbers carry real uncertainty. And age is a feature here; many jurisdictions restrict its use in credit decisions.
 
+## A production lesson: parallelism on shared hosts
+
+The first release of this model took the hosted demo down. Nothing was wrong with the model; the cause was how it used the machine.
+
+- **Processes.** Cross-validation ran with `n_jobs=-1`, one worker process per CPU core. On 4 cores that was 1.26 GB across 7 processes, where the old model used one process. Now it uses one process by default (357 MB) and gives the identical model.
+- **Threads.** Gradient boosting starts one thread per core it can *see*. A shared cloud host can show dozens of cores while the app may use about one. Simulated in a 1-CPU container with 64 threads, a retrain took **108 s; capped at 2 threads it takes 3.7 s**.
+- **Start-up work.** The app ran the hyperparameter search on first start. It now trains with the recorded best parameters.
+
+The tests passed throughout, because CI machines have spare cores and memory. The failure only showed up under the host's limits, with no error message. What caught it was simulating those limits (`docker run --cpus=1`, many threads) and measuring. `OBSERVATORY_JOBS` and `OBSERVATORY_THREADS` raise the limits on a machine you control.
+
 ## Questions an interviewer might ask
 
 - *Why gradient boosting?* Not for accuracy, which is equal across tree models. For calibrated probabilities without an extra layer, explanations that match the served output, and a much smaller, faster model.
@@ -87,4 +97,5 @@ Also worth saying: the 50+ group has only 336 test clients, so its numbers carry
 - *How did you choose the threshold?* Cross-validated for F1. In practice I'd use the business's costs of each error type.
 - *How do you know the probabilities are right?* Calibration error and Brier score on a held-out split, and a reliability plot in the model card.
 - *Is the model fair?* It depends on the definition: it passes recall parity and per-group calibration, but fails the four-fifths rule because real default rates differ by age. I'd surface that trade-off to the people accountable for the decision.
+- *Tell me about a production incident.* The new model crashed the hosted demo: per-core worker processes and per-core threads on a shared host. I rolled back, reproduced it in a CPU-limited container, capped both, and added regression tests.
 - *What would improve it?* Better features, not a different algorithm. The comparison shows the algorithms are tied.

@@ -27,6 +27,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, TunedThresholdClassifierCV
+from threadpoolctl import threadpool_limits
 
 SEED = 42
 CV_FOLDS = 5
@@ -37,6 +38,14 @@ CV_FOLDS = 5
 # fast, so one process takes seconds. Raise it for a big search on your own
 # machine: OBSERVATORY_JOBS=4 python train.py
 N_JOBS = int(os.environ.get("OBSERVATORY_JOBS", "1"))
+
+# Threads for gradient boosting (OpenMP). By default it starts one thread per
+# CPU core it can see. A shared cloud host can show dozens of cores while the
+# app may only use about one, and the threads then fight each other: in a
+# 1-CPU container with 64 threads, a retrain took over 40 s instead of 3 s.
+# The cap applies to this whole process, for as long as _thread_cap is alive.
+MAX_THREADS = int(os.environ.get("OBSERVATORY_THREADS", "2"))
+_thread_cap = threadpool_limits(limits=MAX_THREADS, user_api="openmp")
 
 # the best parameters tune() found on the training data (CV AUC 0.773); used
 # by `python train.py --no-tune` and as a fallback (see docs/MODEL.md)
