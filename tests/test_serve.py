@@ -86,3 +86,29 @@ def test_picks_up_a_promoted_model_without_restart(api):
     assert r.json()["model_version"] == "v2"
     # drift is tracked per model: only v2's 3 clients count, not v1's 5
     assert api.get("/monitoring/drift").json()["rows"] == 3
+
+
+def test_decision_uses_the_models_threshold(api):
+    import model as mdl
+
+    v1 = registry.load_model(registry.load_registry()["models"][0])
+    body = api.post("/predict", json={"clients": clients(50)}).json()
+    assert body["threshold"] == pytest.approx(mdl.threshold(v1), abs=1e-4)
+    assert body["threshold"] != 0.5
+    for p in body["predictions"]:
+        assert p["default"] == (p["default_probability"] >= body["threshold"] - 1e-4)
+        assert p["reasons"] is None
+
+
+def test_explain_returns_reasons_that_add_up(api):
+    import math
+
+    body = api.post("/predict", params={"explain": "true"}, json={"clients": clients(3)}).json()
+    assert body["base_log_odds"] is not None
+    for p in body["predictions"]:
+        reasons = p["reasons"]
+        assert [r["feature"] for r in reasons] and len(reasons) == len(make_data.FEATURE_NAMES)
+        sizes = [abs(r["contribution"]) for r in reasons]
+        assert sizes == sorted(sizes, reverse=True)  # largest effect first
+        log_odds = body["base_log_odds"] + sum(r["contribution"] for r in reasons)
+        assert 1 / (1 + math.exp(-log_odds)) == pytest.approx(p["default_probability"], abs=2e-3)

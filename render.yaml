@@ -5,7 +5,7 @@ services:
   - type: web
     name: mlops-observatory-api
     runtime: docker
-    plan: free            # 512 MB: one worker (~330 MB) fits. Sleeps after 15 min idle.
+    plan: free            # 512 MB: one worker (~320 MB) fits. Sleeps after 15 min idle.
     region: oregon
     branch: main
     autoDeploy: true

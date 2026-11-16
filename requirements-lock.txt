@@ -330,6 +330,7 @@ cloudpickle==3.1.2 \
     # via
     #   joblib
     #   mlflow-skinny
+    #   shap
 cryptography==50.0.2 \
     --hash=sha256:0ddc924c04591c2811ca024d62ecad4f7f6f08af8939c211438f48a16bd23602 \
     --hash=sha256:0ec5f09541743261e66e291b4a0cbf0fb2997aeaab6d9e9c740b9dba1b58d1c2 \
@@ -818,6 +819,7 @@ numpy==2.5.4 \
     #   pydeck
     #   scikit-learn
     #   scipy
+    #   shap
     #   skops
     #   streamlit
 opentelemetry-api==1.45.2 \
@@ -847,6 +849,7 @@ packaging==26.3 \
     #   altair
     #   mlflow-skinny
     #   plotly
+    #   shap
     #   skops
     #   streamlit
 pandas==3.1.1 \
@@ -910,6 +913,7 @@ pandas==3.1.1 \
     --hash=sha256:fdd87cf4d59a3c45f17af6ec965d0bd10b9f15e1b5082d2da11a577439551bcd
     # via
     #   -r requirements.txt
+    #   shap
     #   streamlit
 pillow==13.0.0 \
     --hash=sha256:02464da86f561f410e13b061ec37c3068a9cb557a095494157742d07b3c24a27 \
@@ -1522,6 +1526,7 @@ scikit-learn==1.9.1 \
     --hash=sha256:ffbcbbbb44202fbe9bc64bced25a145759adb9ef010b3d37a8064958ac13df2a
     # via
     #   -r requirements.txt
+    #   shap
     #   skops
 scipy==1.18.1 \
     --hash=sha256:011413b7426b75012840e35649e00fe0a2c3bae89fed433876e3a99251572efc \
@@ -1588,11 +1593,44 @@ scipy==1.18.1 \
     # via
     #   -r requirements.txt
     #   scikit-learn
+    #   shap
     #   skops
+shap==0.54.1 \
+    --hash=sha256:017958eaba102ae405803138f2ec9808b7909e52704c843e47e4967ac7a38270 \
+    --hash=sha256:0574520c471ccfccc20f208cbe94170852027e79e36ac34f68fe2152888440a0 \
+    --hash=sha256:06efbb969326fea8bbe39ef4e3f73dc2d41c7cc08a89d3f8e3a0e480e1534004 \
+    --hash=sha256:074821de63800eb8a119286c865d76605586ea3f7215ffdae5f00b2e69a0fe07 \
+    --hash=sha256:0b7b70f7983b931e35dbef7c751447d5d9d4b67eba6ccc38fb07fcec841959e7 \
+    --hash=sha256:102f7b748e3f4e7deaf53cf005958186e47db9c13768de3612ec27e8760bced7 \
+    --hash=sha256:113a23d64f3b7b81e12c2e5510562c3227e7e83fa4ab27fdff835ec3237fb17a \
+    --hash=sha256:178312062dd3d2bcf0213722f2e6aef599e1a145fe52cd25e07c1337be6705da \
+    --hash=sha256:1a007d085e27fec8d6b32dad4f4b317e4d4443eaf91447b57cb3307cee998b74 \
+    --hash=sha256:1de58fde32686a2757bada96a7cb0a77649aa519800e5ab059faaab3900c6720 \
+    --hash=sha256:1f3fbed967d39e24819ad31bf7af02f385c16879f8d1a246d9aabbd1ade48d22 \
+    --hash=sha256:21ebf8eb8f9d407105ced63a2c60dadce23e21be35e1e8c167554a1c780c6782 \
+    --hash=sha256:372e562b9581f63b2ebcf42023ab0ca5aab57a82ac080e107a28d43d17b733a7 \
+    --hash=sha256:487ef4b66d53769d1274d1b499f2279bfa5e40cb9b00a12744888a06234066b9 \
+    --hash=sha256:50975579e2e4562bfef8984ad4b82fe62bac28e3df6503de99cfc8373f736eda \
+    --hash=sha256:58e4dd674e75fdba27a0cb8fdbe31fedfcfb3c66ec4daec74111a4014ef9e89c \
+    --hash=sha256:61f0db25d4296d3c8eaedfb3dd33f8b5c92019b42143e0ce980da4608bbe98f5 \
+    --hash=sha256:64bdcddc736fd84991d94b7f85c9e6e94a5efb20b597326bdea59e2a943143d0 \
+    --hash=sha256:6924c0c77962b434b9bb475a387c24e07bac6b118c8300575176e5d34d5d1c77 \
+    --hash=sha256:bad8cf790ec78c7e9ac5311affe819b37d5cf28413ccfab9686011af0848e63b \
+    --hash=sha256:bcdc28e7fa6784e3e1b631522cf77e8654d8dde302029e1b4fb5a6d995ebe85d \
+    --hash=sha256:d968bdbe630271efadd913939b0745d25cd3cca07426a12fe5d38e5bc883bd8c \
+    --hash=sha256:e40e58a72aee0b8cd26fa998a0b00cebc5bbba9d5bc842569e179c8c28533598 \
+    --hash=sha256:e6ac3ef69d44753d7030b0df41977cdbe44bd59c405e6c0f036399931b671232 \
+    --hash=sha256:f0eb821c206a74eb5bfeef72976f230e01c9b6b176dee8996bd9639dbd263b38 \
+    --hash=sha256:f4842232639ec9717f63e9088e81955359fc78f9998b86c707bcbb6cb79f44f1
+    # via -r requirements.txt
 skops==0.16.0 \
     --hash=sha256:58ddb63fed9f2a8545baa1a91c45c26d44cf65c83e2fd217541c41e411cf1d74 \
     --hash=sha256:5b2eb1bc49392c74a38db04481e2d110f97d9a72d6ae38fbd698aa7a865a9070
     # via -r requirements.txt
+slicer==0.0.8 \
+    --hash=sha256:2e7553af73f0c0c2d355f4afcc3ecf97c6f2156fcf4593955c3f56cf6c4d6eb7 \
+    --hash=sha256:6c206258543aecd010d497dc2eca9d2805860a0b3758673903456b7df7934dc3
+    # via shap
 smmap==5.0.3 \
     --hash=sha256:4d9debb8b99007ae47165abc08670bd74cb74b5227dda7f643eccc4e9eb5642c \
     --hash=sha256:c106e05d5a61449cf6ba9a1e650227ecfb141590d2a98412103ff35d89fc7b2f
@@ -1692,6 +1730,10 @@ threadpoolctl==3.8.0 \
     --hash=sha256:01080674ad7ac6182429c918a79de92da789bb448acc02fc0b620b1abd6b6137 \
     --hash=sha256:f1b49c82704d50f13ffae019c727b0fa4f6791a58f48f06a09c45face1be66da
     # via scikit-learn
+tqdm==4.70.1 \
+    --hash=sha256:c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73 \
+    --hash=sha256:cefd0eca11b2a37a3aee776544d4f4ae913f02688135b5556b8788dfa474afc4
+    # via shap
 typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8 \
     --hash=sha256:dc983d19a509c94dba722ee6abd33940f7c05a89e243c47e907eb4db6f1a43e5
