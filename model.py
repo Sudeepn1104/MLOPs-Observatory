@@ -12,6 +12,8 @@ Design (see docs/MODEL.md for the reasoning and the measurements behind it):
   So `predict_proba` is an honest probability and `predict` is the decision.
 - SHAP explanations per prediction, and fairness metrics across age groups.
 """
+import os
+
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
@@ -28,6 +30,13 @@ from sklearn.model_selection import RandomizedSearchCV, StratifiedKFold, TunedTh
 
 SEED = 42
 CV_FOLDS = 5
+
+# Worker processes for cross-validation. Default 1: every extra process costs
+# about 200 MB, and the dashboard retrains inside a memory-limited host
+# (n_jobs=-1 used 1.3 GB on 4 cores and crashed the hosted demo). The fits are
+# fast, so one process takes seconds. Raise it for a big search on your own
+# machine: OBSERVATORY_JOBS=4 python train.py
+N_JOBS = int(os.environ.get("OBSERVATORY_JOBS", "1"))
 
 # the best parameters tune() found on the training data (CV AUC 0.773); used
 # by `python train.py --no-tune` and as a fallback (see docs/MODEL.md)
@@ -60,7 +69,7 @@ def base_model(params=None):
 def build_model(params=None):
     """Unfitted model: gradient boosting plus a cross-validated decision threshold."""
     return TunedThresholdClassifierCV(
-        base_model(params), scoring="f1", cv=CV_FOLDS, random_state=SEED, n_jobs=-1
+        base_model(params), scoring="f1", cv=CV_FOLDS, random_state=SEED, n_jobs=N_JOBS
     )
 
 
@@ -77,7 +86,7 @@ def tune(X, y, n_iter=20):
         scoring="roc_auc",
         cv=StratifiedKFold(CV_FOLDS, shuffle=True, random_state=SEED),
         random_state=SEED,
-        n_jobs=-1,
+        n_jobs=N_JOBS,
     )
     search.fit(X, y)
     results = pd.DataFrame(search.cv_results_)

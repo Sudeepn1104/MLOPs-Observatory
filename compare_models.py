@@ -53,7 +53,7 @@ def compare(X_train, y_train, X_test, y_test):
     cv = StratifiedKFold(mdl.CV_FOLDS, shuffle=True, random_state=mdl.SEED)
     rows = []
     for name, est in candidates().items():
-        cv_auc = cross_val_score(est, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=-1)
+        cv_auc = cross_val_score(est, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=mdl.N_JOBS)
         # as fitted ("raw": implicit 0.5 threshold) and with a tuned threshold
         raw = mdl.evaluate(est.fit(X_train, y_train), X_test, y_test)
         tuned = TunedThresholdClassifierCV(est, scoring="f1", cv=mdl.CV_FOLDS, random_state=mdl.SEED)
