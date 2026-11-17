@@ -42,6 +42,8 @@ def test_reconnect_makes_a_running_process_see_a_replaced_database(trained, empt
     """Regression: after a rebuild the app kept reading the deleted database file."""
     import shutil
 
+    import shap  # noqa: F401 - its lazy plotting module once made reconnect() raise
+
     assert len(registry.load_registry()["models"]) == 1  # opens a connection
     registry.db_path().unlink()
     shutil.copy(empty_mlflow_db, registry.db_path())  # another process replaced the file

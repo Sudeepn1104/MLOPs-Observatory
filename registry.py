@@ -364,7 +364,9 @@ def reconnect():
     from sqlalchemy.engine import Engine
 
     for obj in gc.get_objects():
-        if isinstance(obj, Engine):
+        # type(), not isinstance(): isinstance reads obj.__class__, which runs
+        # code on lazy-import proxies (SHAP's plotting module raises ImportError)
+        if issubclass(type(obj), Engine):
             obj.dispose()
 
 
