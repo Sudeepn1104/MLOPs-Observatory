@@ -351,6 +351,25 @@ def _strip_file_scheme(uri):
     return uri[len("file://"):] if uri.startswith("file://") else uri
 
 
+def reconnect():
+    """Drops every open database connection held by this process.
+
+    MLflow keeps connections open per store. When another process replaces a
+    store's database file (train.py does, via wipe()), a process that was
+    already running would keep reading the old, deleted file. Call this after
+    such a rebuild; the next query reopens the file by path.
+    """
+    import gc
+
+    from sqlalchemy.engine import Engine
+
+    for obj in gc.get_objects():
+        # type(), not isinstance(): isinstance reads obj.__class__, which runs
+        # code on lazy-import proxies (SHAP's plotting module raises ImportError)
+        if issubclass(type(obj), Engine):
+            obj.dispose()
+
+
 def wipe(root="."):
     """Deletes the whole store. Only for a fresh start in a new process (train.py)."""
     db_path(root).unlink(missing_ok=True)

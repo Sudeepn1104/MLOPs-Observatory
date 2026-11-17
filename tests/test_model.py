@@ -112,3 +112,14 @@ def test_openmp_threads_are_capped_in_every_process_that_loads_models():
         cwd=Path(__file__).resolve().parent.parent,
     )
     assert out.stdout.strip().splitlines()[-1] == str(mdl.MAX_THREADS) == "2", out.stderr[-500:]
+
+
+def test_explanations_work_for_other_tree_models_too(data):
+    """Regression: a RandomForest has its own `estimator_` attribute, which broke unwrapping."""
+    from sklearn.ensemble import RandomForestClassifier
+
+    X, y = data
+    rf = RandomForestClassifier(n_estimators=10, max_depth=4, random_state=0).fit(X.head(2000), y.head(2000))
+    assert mdl.inner_model(rf) is rf
+    contrib, base = mdl.contributions(rf, X.head(5))
+    assert contrib.shape == (5, X.shape[1]) and isinstance(base, float)
