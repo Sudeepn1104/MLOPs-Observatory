@@ -13,6 +13,36 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+def source_mtimes():
+    """What app.py's reload guard records: the modification time of each project module."""
+    return {p.stem: p.stat().st_mtime_ns for p in ROOT.glob("*.py") if p.name != "app.py"}
+
+
+@pytest.fixture(autouse=True)
+def sources_unchanged():
+    """Tells app.py's reload guard that no source changed, so it keeps the modules
+    the tests imported (and patched). Tests of the guard itself override this."""
+    import types
+
+    seen = types.ModuleType("_observatory_sources")
+    seen.mtimes = source_mtimes()
+    sys.modules["_observatory_sources"] = seen
+    yield
+    sys.modules.pop("_observatory_sources", None)
+
+
+@pytest.fixture
+def restore_modules():
+    """For tests that make app.py reload project modules: put the originals back
+    afterwards, so other tests keep patching the modules that are actually in use."""
+    names = list(source_mtimes())
+    before = {n: sys.modules[n] for n in names if n in sys.modules}
+    yield
+    for n in names:
+        sys.modules.pop(n, None)
+    sys.modules.update(before)
+
+
 @pytest.fixture
 def workdir(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
