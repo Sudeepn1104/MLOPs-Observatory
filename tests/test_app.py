@@ -10,6 +10,10 @@ def test_app_renders(trained):
     at = AppTest.from_file(APP, default_timeout=60).run()
     assert not at.exception
     assert at.title[0].value == "Tiny MLOps Observatory"
+    subheaders = [h.value for h in at.subheader]
+    assert "Explain one client" in subheaders
+    assert "Fairness across age groups" in subheaders
+    assert "Calibration: can the probabilities be trusted?" in subheaders
 
 
 def test_retrain_button_promotes(trained):

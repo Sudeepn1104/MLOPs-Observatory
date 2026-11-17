@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
-from sklearn.ensemble import RandomForestClassifier
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -38,8 +37,23 @@ def empty_mlflow_db(tmp_path_factory):
     return registry.db_path(root)
 
 
+@pytest.fixture(scope="session")
+def fitted_v1(tmp_path_factory):
+    """Model v1, fitted once per test session (fitting the tuned threshold takes seconds)."""
+    import make_data
+    import model as mdl
+
+    root = tmp_path_factory.mktemp("fit")
+    make_data.prepare(ROOT / make_data.RAW, root / "train.csv", root / "pool.csv")
+    df = pd.read_csv(root / "train.csv")
+    X, y = df.drop(columns=[make_data.TARGET]), df[make_data.TARGET]
+    params = {**mdl.DEFAULT_PARAMS, "max_iter": 60}  # small, so tests stay fast
+    fitted = mdl.build_model(params).fit(X, y)
+    return fitted, params, mdl.evaluate(fitted, X, y)
+
+
 @pytest.fixture
-def trained(workdir, empty_mlflow_db):
+def trained(workdir, empty_mlflow_db, fitted_v1):
     """A small but real v1: data split, model, reference, metrics and simulated logs."""
     import shutil
 
@@ -50,13 +64,10 @@ def trained(workdir, empty_mlflow_db):
     Path("data").mkdir()
     shutil.copy(ROOT / "data" / "credit_default_raw.csv.gz", "data/")
     make_data.prepare()
-    df = pd.read_csv(make_data.TRAIN)
-    X, y = df.drop(columns=[make_data.TARGET]), df[make_data.TARGET]
+    X = pd.read_csv(make_data.TRAIN).drop(columns=[make_data.TARGET])
     Path("models").mkdir()
     shutil.copy(empty_mlflow_db, "models/mlflow.db")
-    model = RandomForestClassifier(
-        n_estimators=30, max_depth=6, class_weight="balanced", random_state=0
-    ).fit(X, y)
-    train.register_v1(model, X, {"accuracy": 0.77, "f1": 0.5, "auc": 0.76}, {"n_estimators": 30})
+    fitted, params, metrics = fitted_v1
+    train.register_v1(fitted, X, metrics, params)
     simulate.run()
     return workdir

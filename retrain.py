@@ -7,10 +7,10 @@ The retrain rule itself (when to retrain) lives in monitor.py.
 
 from sklearn.model_selection import train_test_split
 
+import model as mdl
 import registry
 from make_data import TARGET
 from monitor import load_batches
-from train import MODEL_PARAMS, build_model, evaluate
 
 RECENT_BATCHES = 4  # how many of the latest batches to learn from
 
@@ -32,10 +32,14 @@ def retrain(trigger="manual", root="."):
         X, y, test_size=0.3, random_state=42, stratify=y
     )
 
-    challenger = build_model().fit(X_tr, y_tr)
+    # same hyperparameters as the champion (tuned on 16,000 rows; a search on
+    # 1,400 recent rows would overfit), but a fresh decision threshold
+    params = champion.get("model_params") or mdl.DEFAULT_PARAMS
+    challenger = mdl.build_model(params).fit(X_tr, y_tr)
 
-    champ_metrics = evaluate(registry.load_model(champion), X_te, y_te)
-    new_metrics = evaluate(challenger, X_te, y_te)
+    champ_metrics = mdl.evaluate(registry.load_model(champion), X_te, y_te)
+    new_metrics = mdl.evaluate(challenger, X_te, y_te)
+    fair_table, fair_summary = mdl.fairness(challenger, X_te, y_te)
     promoted = new_metrics["auc"] >= champ_metrics["auc"]
 
     # one MLflow run per retrain; the champion alias moves only if promoted
@@ -51,15 +55,17 @@ def retrain(trigger="manual", root="."):
             "compared_with": champion["version"],
             "champion_metrics_on_holdout": champ_metrics,
             "promoted": bool(promoted),
+            "model_params": params,
         },
         params={
-            "model_type": type(challenger).__name__, **MODEL_PARAMS,
+            "model_type": type(challenger.estimator_).__name__, **params,
             "train_rows": len(X_tr), "holdout_rows": len(X_te),
             "batches": f"{last - RECENT_BATCHES + 1}-{last}", "compared_with": champion["version"],
         },
         promote=bool(promoted),
         root=root,
         run_name=f"challenger vs {champion['version']}",
+        artifacts={"fairness.csv": fair_table, "fairness_summary.json": fair_summary},
     )
 
 

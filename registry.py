@@ -44,6 +44,8 @@ from mlflow.exceptions import MlflowException  # noqa: E402
 from mlflow.models import infer_signature  # noqa: E402
 from mlflow.tracking import MlflowClient  # noqa: E402
 
+import model as _model  # noqa: E402, F401 - importing it caps OpenMP threads in every process that loads a model
+
 MODEL_NAME = "credit-default"
 EXPERIMENT = "credit-default"
 ALIAS = "champion"
@@ -134,13 +136,18 @@ def _trusted_types(model):
 
 
 # ---------- writing ----------
-def register_version(model, reference, fields, params=None, promote=True, root=".", run_name=None):
+def register_version(model, reference, fields, params=None, promote=True, root=".", run_name=None,
+                     artifacts=None, search=None):
     """Logs one training run to MLflow and registers its model as a new version.
 
     model:     fitted scikit-learn estimator
     reference: the training features (DataFrame), kept as the drift baseline
     fields:    registry entry fields (trigger, metrics, evaluated_on, ...)
+    params:    hyperparameters and settings, logged as run parameters
     promote:   True moves the champion alias to the new version
+    artifacts: {"name.csv": DataFrame, "name.json": dict} logged under evaluation/
+    search:    hyperparameter search results (DataFrame, one row per candidate),
+               logged as child runs of this run so the MLflow UI can compare them
 
     Returns the registry entry of the new version.
     """
@@ -181,6 +188,15 @@ def register_version(model, reference, fields, params=None, promote=True, root="
             ref_file = Path(tmp) / "reference.csv"
             reference.to_csv(ref_file, index=False)
             c.log_artifact(run_id, str(ref_file), "reference")
+            for name, obj in (artifacts or {}).items():
+                path = Path(tmp) / name
+                if isinstance(obj, pd.DataFrame):
+                    obj.to_csv(path, index=False)
+                else:
+                    path.write_text(json.dumps(obj, indent=2))
+                c.log_artifact(run_id, str(path), "evaluation")
+        if search is not None:
+            _log_search(c, exp_id, run_id, search)
         c.set_terminated(run_id, "FINISHED")
     except BaseException:
         c.set_terminated(run_id, "FAILED")
@@ -203,6 +219,35 @@ def register_version(model, reference, fields, params=None, promote=True, root="
             c.set_model_version_tag(MODEL_NAME, champion.version, "status", "archived")
         c.set_registered_model_alias(MODEL_NAME, ALIAS, mv.version)
     return _entry(c.get_model_version(MODEL_NAME, mv.version))
+
+
+def _log_search(c, exp_id, parent_id, results):
+    """One child run per hyperparameter candidate, nested under the training run."""
+    metric_cols = {
+        "mean_test_score": "cv_auc", "std_test_score": "cv_auc_std", "mean_fit_time": "fit_seconds",
+    }
+    for i, row in results.iterrows():
+        child = c.create_run(exp_id, run_name=f"candidate {i + 1}", tags={"mlflow.parentRunId": parent_id})
+        cid = child.info.run_id
+        for k, v in row.items():
+            if k in metric_cols:
+                c.log_metric(cid, metric_cols[k], float(v))
+            elif k != "rank_test_score":
+                c.log_param(cid, k, v)
+        c.set_tag(cid, "rank", int(row["rank_test_score"]))
+        c.set_terminated(cid, "FINISHED")
+
+
+def load_artifact(entry, name):
+    """An evaluation artifact of a version's run (CSV -> DataFrame, JSON -> dict), or None."""
+    if not entry.get("run_id"):
+        return None
+    run_uri = entry["model_uri"].rsplit("/model", 1)[0]
+    try:
+        path = Path(_local(f"{run_uri}/evaluation/{name}"))
+    except Exception:  # noqa: BLE001 - older versions have no such artifact
+        return None
+    return pd.read_csv(path) if name.endswith(".csv") else json.loads(path.read_text())
 
 
 def _champion(c):
