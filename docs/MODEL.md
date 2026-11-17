@@ -88,6 +88,8 @@ The first release of this model took the hosted demo down. Nothing was wrong wit
 - **Threads.** Gradient boosting starts one thread per core it can *see*. A shared cloud host can show dozens of cores while the app may use about one. Simulated in a 1-CPU container with 64 threads, a retrain took **108 s; capped at 2 threads it takes 3.7 s**.
 - **Start-up work.** The app ran the hyperparameter search on first start. It now trains with the recorded best parameters.
 
+- **Leftover state.** After the fix was deployed, the host still had the *previous* model on disk, and the new code crashed trying to explain it. Every model is now stamped with `MODEL_FORMAT`; the app rebuilds when the stored stamp differs, and drops its open database connections so it doesn't keep reading the file the rebuild replaced.
+
 The tests passed throughout, because CI machines have spare cores and memory. The failure only showed up under the host's limits, with no error message. What caught it was simulating those limits (`docker run --cpus=1`, many threads) and measuring. `OBSERVATORY_JOBS` and `OBSERVATORY_THREADS` raise the limits on a machine you control.
 
 ## Questions an interviewer might ask

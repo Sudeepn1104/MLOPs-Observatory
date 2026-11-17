@@ -14,7 +14,7 @@ from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
 
 import model as mdl
 import registry
-from bootstrap import build_all, missing_files
+from bootstrap import build_all, needs_build
 from drift import check_drift
 from make_data import FEATURE_NAMES, TRAIN, make_batch
 from monitor import (
@@ -60,16 +60,21 @@ def overall_status(max_psi):
 
 
 # ---------- guard: required files ----------
-if missing_files():
+# builds on first start, and rebuilds when the host kept a model from older code
+if needs_build():
     try:
-        with st.spinner("First start: building data, model v1 and logs (about 30 seconds)..."):
+        with st.spinner("Building data, model v1 and logs (about 30 seconds)..."):
             build_all()
     except Exception as e:
         st.error(f"Could not build the files automatically ({e}). "
                  "Run: python make_data.py, python train.py, python simulate.py")
         st.stop()
+    registry.reconnect()  # the build replaced the database file this process may have open
     st.cache_data.clear()
     st.cache_resource.clear()
+    if needs_build():  # never loop: if the build didn't fix it, say so
+        st.error(f"The build ran but the app is still not ready: {needs_build()}.")
+        st.stop()
     st.rerun()
 
 if "flash" in st.session_state:

@@ -32,6 +32,13 @@ from threadpoolctl import threadpool_limits
 SEED = 42
 CV_FOLDS = 5
 
+# Identifies how models are built. Every registered model is stamped with it.
+# A host can keep an old model store on disk across a code update; when the
+# stamp of the stored v1 differs from this, the app rebuilds the store instead
+# of running new code against an old model (see bootstrap.py). Change it
+# whenever a model from older code would not work with this code.
+MODEL_FORMAT = "hgb-tuned-threshold-1"
+
 # Worker processes for cross-validation. Default 1: every extra process costs
 # about 200 MB, and the dashboard retrains inside a memory-limited host
 # (n_jobs=-1 used 1.3 GB on 4 cores and crashed the hosted demo). The fits are
@@ -103,6 +110,11 @@ def tune(X, y, n_iter=20):
     results = results[[c for c in results if c.startswith("param_")] + keep]
     results.columns = [c.removeprefix("param_") for c in results.columns]
     return search.best_params_, results.sort_values("rank_test_score").reset_index(drop=True)
+
+
+def inner_model(model):
+    """The boosting model inside the threshold wrapper (any other model is returned as is)."""
+    return model.estimator_ if isinstance(model, TunedThresholdClassifierCV) else model
 
 
 def threshold(model):
@@ -215,7 +227,7 @@ def explainer(model):
     """A SHAP TreeExplainer for the boosting model inside the threshold wrapper."""
     import shap  # imported lazily: only explanation features need it
 
-    return shap.TreeExplainer(getattr(model, "estimator_", model))
+    return shap.TreeExplainer(inner_model(model))
 
 
 def contributions(model, X, explainer_=None):
@@ -227,8 +239,10 @@ def contributions(model, X, explainer_=None):
     """
     ex = explainer_ or explainer(model)
     sv = ex(X)
-    base = float(np.ravel(sv.base_values)[0])
-    return pd.DataFrame(sv.values, columns=X.columns, index=X.index), base
+    values, base = np.asarray(sv.values), np.asarray(sv.base_values)
+    if values.ndim == 3:  # some tree models return one set of values per class
+        values, base = values[:, :, 1], base.reshape(len(values), -1)[:, -1]
+    return pd.DataFrame(values, columns=X.columns, index=X.index), float(np.ravel(base)[0])
 
 
 def global_importance(model, X, explainer_=None):

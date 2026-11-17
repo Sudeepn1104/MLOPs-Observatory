@@ -56,9 +56,10 @@ def retrain(trigger="manual", root="."):
             "champion_metrics_on_holdout": champ_metrics,
             "promoted": bool(promoted),
             "model_params": params,
+            "model_format": mdl.MODEL_FORMAT,
         },
         params={
-            "model_type": type(challenger.estimator_).__name__, **params,
+            "model_type": type(mdl.inner_model(challenger)).__name__, **params,
             "train_rows": len(X_tr), "holdout_rows": len(X_te),
             "batches": f"{last - RECENT_BATCHES + 1}-{last}", "compared_with": champion["version"],
         },
