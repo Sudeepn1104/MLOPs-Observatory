@@ -3,6 +3,8 @@
 Run:  streamlit run app.py
 Needs: python make_data.py, python train.py, python simulate.py first.
 """
+import sys
+import types
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +13,35 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from sklearn.metrics import accuracy_score, f1_score, roc_auc_score
+
+
+def _reload_changed_sources():
+    """Makes a code update take effect without restarting the server.
+
+    Streamlit re-reads this file on every run, but the project's other modules
+    stay in memory. A host that pulls new code under a running process (as
+    Streamlit Community Cloud does when requirements.txt is unchanged) would
+    then run the new app.py against old helper modules, for example failing
+    with "cannot import name ... from bootstrap". So before importing them,
+    compare each source file's modification time with what was loaded, and
+    drop all of them from sys.modules if anything changed. This must live
+    here: a helper module could itself be the stale one.
+    """
+    here = Path(__file__).resolve().parent
+    current = {p.stem: p.stat().st_mtime_ns for p in here.glob("*.py") if p.name != Path(__file__).name}
+    seen = sys.modules.get("_observatory_sources")
+    if seen is None or seen.mtimes != current:
+        for name in current:
+            mod = sys.modules.get(name)
+            # only our own files, never an installed package with the same name
+            if mod is not None and Path(getattr(mod, "__file__", "") or "").resolve().parent == here:
+                del sys.modules[name]
+        seen = types.ModuleType("_observatory_sources")
+        seen.mtimes = current
+        sys.modules["_observatory_sources"] = seen
+
+
+_reload_changed_sources()
 
 import model as mdl
 import registry

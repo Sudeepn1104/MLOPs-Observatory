@@ -90,6 +90,8 @@ The first release of this model took the hosted demo down. Nothing was wrong wit
 
 - **Leftover state.** After the fix was deployed, the host still had the *previous* model on disk, and the new code crashed trying to explain it. Every model is now stamped with `MODEL_FORMAT`; the app rebuilds when the stored stamp differs, and drops its open database connections so it doesn't keep reading the file the rebuild replaced.
 
+- **Leftover code in memory.** The host also updated the source files under the *running* server. Streamlit re-reads `app.py` on each page load but keeps other modules in memory, so the new `app.py` ran against old helper modules and failed on an import. `app.py` now compares each module's file time with what was loaded and reloads them when anything changed.
+
 The tests passed throughout, because CI machines have spare cores and memory. The failure only showed up under the host's limits, with no error message. What caught it was simulating those limits (`docker run --cpus=1`, many threads) and measuring. `OBSERVATORY_JOBS` and `OBSERVATORY_THREADS` raise the limits on a machine you control.
 
 ## Questions an interviewer might ask

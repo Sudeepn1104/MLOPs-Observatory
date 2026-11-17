@@ -49,3 +49,33 @@ def test_sandbox_isolates_visitors(trained, monkeypatch, tmp_path_factory):
     import registry
 
     assert registry.load_registry()["active"] == "v1"  # project registry untouched
+
+
+def test_changed_source_files_are_reloaded_without_a_restart(trained, restore_modules):
+    """Regression: the host updated the files under a running server, and the new app.py
+    failed with "cannot import name 'needs_build' from 'bootstrap'" (the old module was in memory)."""
+    import sys
+
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    assert not at.exception
+    sys.modules["drift"].marker = "loaded before the update"
+
+    at.run()  # nothing changed on disk: the module in memory is kept
+    assert getattr(sys.modules["drift"], "marker", None) == "loaded before the update"
+
+    sys.modules["_observatory_sources"].mtimes["drift"] -= 1  # as if drift.py changed on disk
+    at.run()
+    assert not at.exception
+    assert not hasattr(sys.modules["drift"], "marker")  # a fresh copy was imported
+
+
+def test_first_run_in_a_process_with_old_modules_reloads_them(trained, restore_modules):
+    """The fix must also heal a server that was already running the old code."""
+    import sys
+
+    AppTest.from_file(APP, default_timeout=60).run()
+    sys.modules["bootstrap"].marker = "old module"
+    del sys.modules["_observatory_sources"]  # a process that never ran the guard
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    assert not at.exception
+    assert not hasattr(sys.modules["bootstrap"], "marker")
