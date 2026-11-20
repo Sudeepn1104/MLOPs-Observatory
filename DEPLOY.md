@@ -56,6 +56,10 @@ From then on, every push to `main` redeploys. Render only switches traffic once 
 - predictions and predicted defaults per model version
 - active model
 - the max PSI seen by the last drift check
+- distribution of predicted probabilities
+- live drift per feature (PSI and per-type score), refreshed on scrape at most every 15 s over the last 500 scored clients
+
+Prometheus can send the key as `Authorization: Bearer <key>`. A ready-made Prometheus config and Grafana dashboard are in `monitoring/` (see the README).
 
 **Live drift:** `GET /monitoring/drift?window=500` compares the last 500 scored clients with the active model's training data. It needs no labels.
 

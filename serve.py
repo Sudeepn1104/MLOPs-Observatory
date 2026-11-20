@@ -41,7 +41,7 @@ from pathlib import Path
 import pandas as pd
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.responses import JSONResponse, Response
-from fastapi.security import APIKeyHeader
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from prometheus_client import (
     CONTENT_TYPE_LATEST,
     CollectorRegistry,
@@ -154,6 +154,45 @@ class Metrics:
             "observatory_live_drift_max_psi", "Max PSI of recent traffic at the last drift check",
             ["model_version"], registry=self.registry,
         )
+        self.probability = Histogram(
+            "observatory_predicted_probability", "Predicted probability of default per scored client",
+            ["model_version"], buckets=[i / 20 for i in range(1, 21)], registry=self.registry,
+        )
+        self.drift_score = Gauge(
+            "observatory_live_drift_score",
+            "Per-type drift score of recent traffic per feature (Wasserstein normed or Jensen-Shannon)",
+            ["model_version", "feature", "method"], registry=self.registry,
+        )
+        self.drift_psi = Gauge(
+            "observatory_live_drift_psi", "PSI of recent traffic per feature",
+            ["model_version", "feature"], registry=self.registry,
+        )
+        self.drifted_features = Gauge(
+            "observatory_live_drift_features_drifted",
+            "Features whose per-type drift score is at or above the threshold",
+            ["model_version"], registry=self.registry,
+        )
+        self.drift_rows = Gauge(
+            "observatory_live_drift_window_rows", "Scored clients in the last drift check",
+            ["model_version"], registry=self.registry,
+        )
+        self._drift_checked_at = 0.0
+
+    def record_drift(self, version, rows, report=None):
+        """Publishes a drift check. With no report (too little traffic) only the row count is set."""
+        self.drift_rows.clear()
+        self.drift_rows.labels(version).set(rows)
+        self.drift_score.clear()
+        self.drift_psi.clear()
+        self.drifted_features.clear()
+        if report is None:
+            return
+        for r in report.itertuples():
+            self.drift_score.labels(version, r.feature, r.method).set(r.drift_score)
+            self.drift_psi.labels(version, r.feature).set(r.psi)
+        self.drifted_features.labels(version).set(int(report["drift_detected"].sum()))
+        self.live_max_psi.clear()
+        self.live_max_psi.labels(version).set(float(report["psi"].max()))
 
     def set_active(self, version):
         self.active_model.clear()
@@ -355,13 +394,23 @@ app = FastAPI(
 )
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
+_bearer = HTTPBearer(auto_error=False)
 
 
-def require_api_key(request: Request, key: str | None = Security(_api_key_header)):
-    """Checks X-API-Key in constant time. Open when no key is configured (local dev)."""
+def require_api_key(
+    request: Request,
+    key: str | None = Security(_api_key_header),
+    bearer: HTTPAuthorizationCredentials | None = Security(_bearer),
+):
+    """Checks the key in constant time. Open when no key is configured (local dev).
+
+    Accepts `X-API-Key: <key>` or `Authorization: Bearer <key>`; the second is
+    what Prometheus sends when it scrapes /metrics.
+    """
     keys = request.app.state.settings.api_keys
     if not keys:
         return
+    key = key if key is not None else (bearer.credentials if bearer else None)
     if key is None or not any(hmac.compare_digest(key, k) for k in keys):
         raise HTTPException(401, "missing or invalid API key", headers={"WWW-Authenticate": "ApiKey"})
 
@@ -427,9 +476,35 @@ def version():
     return {"version": APP_VERSION, "git_sha": app.state.settings.git_sha, "model_version": model_version}
 
 
+DRIFT_REFRESH_SECONDS = 15
+DRIFT_WINDOW = 500
+
+
+def _check_live_drift(window):
+    """Drift of the active model's last `window` scored clients. Returns (entry, rows, report or None)."""
+    entry, _, reference = app.state.holder.get()
+    recent = app.state.log.recent(entry["version"], window)
+    if len(recent) < MIN_DRIFT_ROWS:
+        app.state.metrics.record_drift(entry["version"], len(recent))
+        return entry, len(recent), None
+    report = check_drift(reference, recent)
+    app.state.metrics.record_drift(entry["version"], len(recent), report)
+    return entry, len(recent), report
+
+
 @app.get("/metrics", dependencies=protected, include_in_schema=False)
 def metrics():
-    return Response(generate_latest(app.state.metrics.registry), media_type=CONTENT_TYPE_LATEST)
+    """Prometheus metrics. Live drift is recomputed here, at most every DRIFT_REFRESH_SECONDS,
+    so a scraper sees drift without anyone calling /monitoring/drift."""
+    m = app.state.metrics
+    now = time.monotonic()
+    if now - m._drift_checked_at >= DRIFT_REFRESH_SECONDS:
+        m._drift_checked_at = now
+        try:
+            _check_live_drift(DRIFT_WINDOW)
+        except Exception:  # metrics must keep working even if the drift check can't run
+            log.exception("live drift check for /metrics failed")
+    return Response(generate_latest(m.registry), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/model", dependencies=protected)
@@ -466,6 +541,8 @@ def predict(
     app.state.log.write(request_id, entry["version"], clients, proba)
     app.state.metrics.predictions.labels(entry["version"]).inc(len(clients))
     app.state.metrics.predicted_defaults.labels(entry["version"]).inc(int(decisions.sum()))
+    for p in proba:
+        app.state.metrics.probability.labels(entry["version"]).observe(float(p))
     reasons, base = [None] * len(clients), None
     if explain:
         contrib, base = mdl.contributions(model, X, app.state.holder.explainer())
@@ -495,21 +572,18 @@ def live_drift(window: int = Query(500, ge=MIN_DRIFT_ROWS, le=50_000)):
     This works without labels, so it is the early warning in production, where
     true defaults arrive months later.
     """
-    entry, _, reference = app.state.holder.get()
-    recent = app.state.log.recent(entry["version"], window)
-    if len(recent) < MIN_DRIFT_ROWS:
+    entry, rows, report = _check_live_drift(window)
+    if report is None:
         return {
             "model_version": entry["version"],
-            "rows": len(recent),
+            "rows": rows,
             "status": "insufficient_data",
             "detail": f"need at least {MIN_DRIFT_ROWS} scored clients for this model",
         }
-    report = check_drift(reference, recent)
     worst = report.loc[report["psi"].idxmax()]
-    app.state.metrics.live_max_psi.labels(entry["version"]).set(float(worst["psi"]))
     return {
         "model_version": entry["version"],
-        "rows": len(recent),
+        "rows": rows,
         "status": worst["status"],
         "max_psi": float(worst["psi"]),
         "worst_feature": worst["feature"],
