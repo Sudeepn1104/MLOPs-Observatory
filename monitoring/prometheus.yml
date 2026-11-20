@@ -1,0 +1,16 @@
+# Prometheus scrape configuration for the prediction API.
+# /metrics needs the API key; the compose service writes the first key in
+# $API_KEY to /prometheus/api_key at start-up, and Prometheus sends it as
+# "Authorization: Bearer <key>".
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: observatory-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+    authorization:
+      type: Bearer
+      credentials_file: /prometheus/api_key

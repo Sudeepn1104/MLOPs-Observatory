@@ -6,6 +6,10 @@
 #   API:       http://localhost:8000/docs   (send X-API-Key)
 #   Dashboard: http://localhost:8501
 #   MLflow UI: http://localhost:5000        (runs, metrics, registered model versions)
+#
+#   docker compose --profile monitoring --profile demo up --build
+#   also starts Prometheus (http://localhost:9090), Grafana with the
+#   dashboard (http://localhost:3000) and drifting demo traffic.
 services:
   api:
     build:
@@ -54,6 +58,66 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # ---- optional: metrics and dashboards (docker compose --profile monitoring up) ----
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
+    environment:
+      API_KEY: ${API_KEY:?set API_KEY in .env (see .env.example)}
+    # /metrics needs the API key: write the first key to a file that
+    # Prometheus sends as "Authorization: Bearer <key>" (see monitoring/prometheus.yml)
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        echo "$$API_KEY" | cut -d, -f1 | tr -d '\n' > /prometheus/api_key &&
+        exec /bin/prometheus --config.file=/etc/prometheus/prometheus.yml
+        --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=7d
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"  # no login: this machine only
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:13.2.6@sha256:b21409d7951ddcfd63a4b49083e4ef2cc35bc1437d071813bf82bfb238b00bca
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"  # view the dashboard without logging in
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/observatory.json
+      GF_ANALYTICS_REPORTING_ENABLED: "false"  # no usage data sent to Grafana Labs
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:3000:3000"  # this machine only
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # ---- optional: drifting demo traffic (docker compose --profile demo up) ----
+  loadgen:
+    profiles: ["demo"]
+    image: mlops-observatory:latest
+    command: ["python", "loadgen.py", "--url", "http://api:8000", "--ramp-minutes", "${RAMP_MINUTES:-10}"]
+    environment:
+      API_KEY: ${API_KEY:?set API_KEY in .env (see .env.example)}
+    healthcheck:
+      disable: true
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: "no"
+
 volumes:
   models:
   logs:
+  prometheus:
