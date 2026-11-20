@@ -1,0 +1,88 @@
+# promtool test rules monitoring/alerts_test.yml   (run by CI)
+rule_files:
+  - alerts.yml
+evaluation_interval: 15s
+
+tests:
+  - name: api down for 2 minutes fires, a blip does not
+    interval: 15s
+    input_series:
+      - series: 'up{job="observatory-api"}'
+        values: "1 0 1 1 0x12"
+    alert_rule_test:
+      - {eval_time: 1m, alertname: ObservatoryApiDown, exp_alerts: []}
+      - eval_time: 4m
+        alertname: ObservatoryApiDown
+        exp_alerts:
+          - exp_labels: {severity: critical, job: observatory-api}
+            exp_annotations:
+              summary: "The prediction API is not answering scrapes"
+              runbook: "docs/RUNBOOK.md#api-down"
+
+  - name: error rate above 5%
+    interval: 1m
+    input_series:
+      - series: 'observatory_http_requests_total{method="POST",route="/predict",status="200"}'
+        values: "0+90x15"
+      - series: 'observatory_http_requests_total{method="POST",route="/predict",status="500"}'
+        values: "0+10x15"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ObservatoryHighErrorRate
+        exp_alerts:
+          - exp_labels: {severity: critical}
+            exp_annotations:
+              summary: "More than 5% of requests fail with a server error"
+              runbook: "docs/RUNBOOK.md#errors"
+
+  - name: healthy traffic raises nothing
+    interval: 1m
+    input_series:
+      - series: 'observatory_http_requests_total{method="POST",route="/predict",status="200"}'
+        values: "0+100x15"
+      - series: 'observatory_live_drift_features_drifted{model_version="v1"}'
+        values: "0x15"
+      - series: 'observatory_live_drift_psi{model_version="v1",feature="age"}'
+        values: "0.05x15"
+    alert_rule_test:
+      - {eval_time: 15m, alertname: ObservatoryHighErrorRate, exp_alerts: []}
+      - {eval_time: 15m, alertname: ObservatoryLiveDrift, exp_alerts: []}
+      - {eval_time: 15m, alertname: ObservatoryPsiAboveRetrainThreshold, exp_alerts: []}
+
+  - name: sustained live drift
+    interval: 1m
+    input_series:
+      - series: 'observatory_live_drift_features_drifted{model_version="v1"}'
+        values: "0 0 4x20"
+      - series: 'observatory_live_drift_psi{model_version="v1",feature="age"}'
+        values: "0.1 0.1 0.35x20"
+    alert_rule_test:
+      - {eval_time: 8m, alertname: ObservatoryLiveDrift, exp_alerts: []}
+      - eval_time: 13m
+        alertname: ObservatoryLiveDrift
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "4 features drifted on live traffic (per-type tests)"
+              runbook: "docs/RUNBOOK.md#drift"
+      - eval_time: 20m
+        alertname: ObservatoryPsiAboveRetrainThreshold
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "A feature's live PSI is above 0.2, the retrain rule's threshold"
+              runbook: "docs/RUNBOOK.md#drift"
+
+  - name: failing challenger
+    interval: 1m
+    input_series:
+      - series: 'observatory_shadow_errors_total'
+        values: "0+3x10"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: ObservatoryShadowErrors
+        exp_alerts:
+          - exp_labels: {severity: warning}
+            exp_annotations:
+              summary: "The shadow challenger fails to score (clients are not affected)"
+              runbook: "docs/RUNBOOK.md#shadow"

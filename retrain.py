@@ -15,8 +15,12 @@ from monitor import load_batches
 RECENT_BATCHES = 4  # how many of the latest batches to learn from
 
 
-def retrain(trigger="manual", root="."):
+def retrain(trigger="manual", root=".", shadow=False):
     """Trains a challenger, compares it with the champion, and registers it in MLflow.
+
+    shadow=True never promotes: the new version becomes the shadow challenger,
+    scored on live traffic next to the champion (see shadow.py) until someone
+    promotes or rejects it.
 
     root is the workspace (see registry.py). Returns the new registry entry,
     including the champion-vs-challenger comparison.
@@ -43,7 +47,7 @@ def retrain(trigger="manual", root="."):
     promoted = new_metrics["auc"] >= champ_metrics["auc"]
 
     # one MLflow run per retrain; the champion alias moves only if promoted
-    return registry.register_version(
+    entry = registry.register_version(
         challenger,
         X_tr,
         {
@@ -54,7 +58,8 @@ def retrain(trigger="manual", root="."):
             "metrics": new_metrics,
             "compared_with": champion["version"],
             "champion_metrics_on_holdout": champ_metrics,
-            "promoted": bool(promoted),
+            "promoted": bool(promoted) and not shadow,
+            "beats_champion_offline": bool(promoted),
             "model_params": params,
             "model_format": mdl.MODEL_FORMAT,
         },
@@ -63,11 +68,14 @@ def retrain(trigger="manual", root="."):
             "train_rows": len(X_tr), "holdout_rows": len(X_te),
             "batches": f"{last - RECENT_BATCHES + 1}-{last}", "compared_with": champion["version"],
         },
-        promote=bool(promoted),
+        promote=bool(promoted) and not shadow,
         root=root,
-        run_name=f"challenger vs {champion['version']}",
+        run_name=f"challenger vs {champion['version']}" + (" (shadow)" if shadow else ""),
         artifacts={"fairness.csv": fair_table, "fairness_summary.json": fair_summary},
     )
+    if shadow:
+        entry = registry.start_shadow(entry["version"], root)
+    return entry
 
 
 if __name__ == "__main__":
@@ -76,9 +84,14 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Train a challenger on recent batches and compare.")
     p.add_argument("--trigger", default="manual (cli)")
     p.add_argument("--root", default=".")
+    p.add_argument("--shadow", action="store_true",
+                   help="don't promote; score the new version in shadow on live traffic instead")
     args = p.parse_args()
-    e = retrain(trigger=args.trigger, root=args.root)
-    verdict = "promoted to active" if e["promoted"] else "rejected (not better)"
+    e = retrain(trigger=args.trigger, root=args.root, shadow=args.shadow)
+    if args.shadow:
+        verdict = "deployed in shadow"
+    else:
+        verdict = "promoted to active" if e["promoted"] else "rejected (not better)"
     print(
         f"{e['version']} {verdict}: AUC {e['metrics']['auc']:.3f} vs "
         f"{e['compared_with']} {e['champion_metrics_on_holdout']['auc']:.3f} on {e['evaluated_on']}"

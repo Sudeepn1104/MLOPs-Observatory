@@ -9,9 +9,22 @@
 #
 #   docker compose --profile monitoring --profile demo up --build
 #   also starts Prometheus (http://localhost:9090), Grafana with the
-#   dashboard (http://localhost:3000) and drifting demo traffic.
+#   dashboard (http://localhost:3000), drifting demo traffic and a challenger
+#   model in shadow next to the champion.
+# Every service: rotated logs, no privilege escalation, and a memory cap so
+# one runaway process can't take the host down.
+x-defaults: &defaults
+  logging:
+    driver: json-file
+    options: {max-size: "10m", max-file: "3"}
+  security_opt: ["no-new-privileges:true"]
+
 services:
   api:
+    <<: *defaults
+    mem_limit: 1g   # one worker uses about 320 MB; more with SHAP explanations
+    cpus: 2
+    cap_drop: [ALL]
     build:
       context: .
       args:
@@ -20,6 +33,7 @@ services:
     command: ["api"]
     environment:
       API_KEY: ${API_KEY:?set API_KEY in .env (see .env.example)}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-}
       API_WORKERS: ${API_WORKERS:-1}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
@@ -30,6 +44,10 @@ services:
     restart: unless-stopped
 
   dashboard:
+    <<: *defaults
+    mem_limit: 1g
+    cpus: 2
+    cap_drop: [ALL]
     image: mlops-observatory:latest
     command: ["dashboard"]
     environment:
@@ -45,10 +63,18 @@ services:
     restart: unless-stopped
 
   mlflow:
+    <<: *defaults
+    mem_limit: 768m   # one worker (see Dockerfile.mlflow)
+    cpus: 1
+    cap_drop: [ALL]
     build:
       context: .
       dockerfile: Dockerfile.mlflow
     image: mlops-observatory-mlflow:latest
+    command: ["mlflow", "server", "--backend-store-uri", "sqlite:////app/models/mlflow.db",
+              "--host", "0.0.0.0", "--port", "5000", "--workers", "1"]
+    environment:
+      MLFLOW_SERVER_ENABLE_JOB_EXECUTION: "false"  # see Dockerfile.mlflow
     ports:
       - "127.0.0.1:5000:5000"  # no login on the MLflow UI: keep it on this machine only
     volumes:
@@ -60,6 +86,10 @@ services:
 
   # ---- optional: metrics and dashboards (docker compose --profile monitoring up) ----
   prometheus:
+    <<: *defaults
+    mem_limit: 512m
+    cpus: 1
+    cap_drop: [ALL]
     profiles: ["monitoring"]
     image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
     environment:
@@ -74,6 +104,7 @@ services:
         --storage.tsdb.path=/prometheus --storage.tsdb.retention.time=7d
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus:/prometheus
     ports:
       - "127.0.0.1:9090:9090"  # no login: this machine only
@@ -83,6 +114,10 @@ services:
     restart: unless-stopped
 
   grafana:
+    <<: *defaults
+    mem_limit: 512m
+    cpus: 1
+    cap_drop: [ALL]
     profiles: ["monitoring"]
     image: grafana/grafana:13.2.6@sha256:b21409d7951ddcfd63a4b49083e4ef2cc35bc1437d071813bf82bfb238b00bca
     environment:
@@ -104,7 +139,30 @@ services:
     restart: unless-stopped
 
   # ---- optional: drifting demo traffic (docker compose --profile demo up) ----
+  # once: retrain on the recent batches and put the new version in shadow, so the
+  # dashboard's shadow panels compare it with the champion on the demo traffic
+  shadow-init:
+    <<: *defaults
+    mem_limit: 1g
+    cpus: 2
+    cap_drop: [ALL]
+    profiles: ["demo"]
+    image: mlops-observatory:latest
+    command: ["python", "shadow.py", "demo"]
+    volumes:
+      - models:/app/models
+    healthcheck:
+      disable: true
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: "no"
+
   loadgen:
+    <<: *defaults
+    mem_limit: 512m
+    cpus: 1
+    cap_drop: [ALL]
     profiles: ["demo"]
     image: mlops-observatory:latest
     command: ["python", "loadgen.py", "--url", "http://api:8000", "--ramp-minutes", "${RAMP_MINUTES:-10}"]

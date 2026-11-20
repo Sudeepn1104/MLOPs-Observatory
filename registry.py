@@ -49,6 +49,7 @@ import model as _model  # noqa: E402, F401 - importing it caps OpenMP threads in
 MODEL_NAME = "credit-default"
 EXPERIMENT = "credit-default"
 ALIAS = "champion"
+CHALLENGER = "challenger"  # a version scored in shadow on live traffic, never served
 
 # Models are saved in the skops format, which (unlike pickle) cannot run code
 # when loaded. Only types from these packages are trusted inside a model file.
@@ -251,8 +252,12 @@ def load_artifact(entry, name):
 
 
 def _champion(c):
+    return _by_alias(c, ALIAS)
+
+
+def _by_alias(c, alias):
     try:
-        return c.get_model_version_by_alias(MODEL_NAME, ALIAS)
+        return c.get_model_version_by_alias(MODEL_NAME, alias)
     except MlflowException:
         return None
 
@@ -300,6 +305,71 @@ def champion_key(root="."):
     if champion is None:
         raise LookupError("no champion model is registered")
     return f"v{champion.version}", champion.run_id or champion.tags.get("source_run_id")
+
+
+def challenger_key(root="."):
+    """Like champion_key, for the shadow challenger, or None when there is none."""
+    mv = _by_alias(client(root), CHALLENGER)
+    if mv is None:
+        return None
+    return f"v{mv.version}", mv.run_id or mv.tags.get("source_run_id")
+
+
+def get_challenger(root="."):
+    """Registry entry of the shadow challenger, or None."""
+    mv = _by_alias(client(root), CHALLENGER)
+    return None if mv is None else _entry(mv)
+
+
+# ---------- shadow deployment ----------
+def _number(version):
+    return str(version).lstrip("v")
+
+
+def start_shadow(version, root="."):
+    """Points the challenger alias at `version`: the API scores it in shadow from the next request.
+
+    The champion keeps answering every request; the challenger's predictions are only logged.
+    """
+    c = client(root)
+    n = _number(version)
+    mv = c.get_model_version(MODEL_NAME, n)  # raises if it doesn't exist
+    champion = _champion(c)
+    if champion is not None and str(champion.version) == str(mv.version):
+        raise ValueError(f"v{n} is already the champion")
+    previous = _by_alias(c, CHALLENGER)
+    if previous is not None and str(previous.version) != str(mv.version):
+        c.set_model_version_tag(MODEL_NAME, previous.version, "status", "rejected")
+    c.set_registered_model_alias(MODEL_NAME, CHALLENGER, n)
+    c.set_model_version_tag(MODEL_NAME, n, "status", "shadow")
+    return _entry(c.get_model_version(MODEL_NAME, n))
+
+
+def stop_shadow(root=".", status="rejected"):
+    """Removes the challenger alias. Returns the entry it pointed at, or None."""
+    c = client(root)
+    mv = _by_alias(c, CHALLENGER)
+    if mv is None:
+        return None
+    c.delete_registered_model_alias(MODEL_NAME, CHALLENGER)
+    c.set_model_version_tag(MODEL_NAME, mv.version, "status", status)
+    return _entry(c.get_model_version(MODEL_NAME, mv.version))
+
+
+def promote(version, root="."):
+    """Makes `version` the champion (served from the next request) and archives the old one."""
+    c = client(root)
+    n = _number(version)
+    c.get_model_version(MODEL_NAME, n)
+    champion = _champion(c)
+    challenger = _by_alias(c, CHALLENGER)
+    if challenger is not None and str(challenger.version) == n:
+        c.delete_registered_model_alias(MODEL_NAME, CHALLENGER)
+    if champion is not None and str(champion.version) != n:
+        c.set_model_version_tag(MODEL_NAME, champion.version, "status", "archived")
+    c.set_registered_model_alias(MODEL_NAME, ALIAS, n)
+    c.set_model_version_tag(MODEL_NAME, n, "status", "active")
+    return _entry(c.get_model_version(MODEL_NAME, n))
 
 
 def _local(uri):
