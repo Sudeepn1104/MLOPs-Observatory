@@ -1,12 +1,52 @@
 # Tiny MLOps Observatory
 
-A Streamlit dashboard that watches a credit-default model trained on **real data** (30,000 credit card clients), warns when **data drift** or a **performance drop** happens, retrains the model, and compares v1 against v2 before promoting it.
+[![CI](https://github.com/Sudeepn1104/MLOPs-Observatory/actions/workflows/ci.yml/badge.svg)](https://github.com/Sudeepn1104/MLOPs-Observatory/actions/workflows/ci.yml)
+[![Release image](https://github.com/Sudeepn1104/MLOPs-Observatory/actions/workflows/release.yml/badge.svg)](https://github.com/Sudeepn1104/MLOPs-Observatory/pkgs/container/mlops-observatory)
+[![Live demo](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://mlops-observatory-sudeepunayak.streamlit.app/)
+![Python 3.11 to 3.13](https://img.shields.io/badge/python-3.11%20to%203.13-3776AB)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-Built with Python, pandas, scikit-learn, SHAP, MLflow, Evidently, FastAPI, Streamlit, plotly, Prometheus, Grafana and Docker. Experiments and the model registry run on MLflow. Drift is measured two ways: PSI and KS (my own implementation, which drives the retrain rule), and Evidently's per-type tests, reproduced in scipy and checked against Evidently itself, which also produces the HTML drift reports.
+The whole life of a production ML model, end to end: a credit-default model trained on **real data** (30,000 credit card clients) is served by an API, watched for **data drift** and **performance drops**, retrained, tried in **shadow** on live traffic, and promoted only when it's safe.
 
-**Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/
+Built with Python, pandas, scikit-learn, SHAP, MLflow, Evidently, FastAPI, Streamlit, plotly, Prometheus, Grafana and Docker.
 
-**Deploying:** the API ships as a hardened Docker image with a one-click Render Blueprint. See [DEPLOY.md](DEPLOY.md).
+**Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/ · **Deploy:** [DEPLOY.md](DEPLOY.md) · **Operate:** [RUNBOOK](docs/RUNBOOK.md) · **Changes:** [CHANGELOG](CHANGELOG.md)
+
+![Demo: drift is detected, a silent failure is caught, v2 is retrained, compared and takes over](screenshots/demo.gif)
+
+## At a glance
+
+| Stage | What's here | Read more |
+|---|---|---|
+| Data | Real UCI credit data, split into training, test and a stream of unseen clients | [Data](#data) |
+| Model | Calibrated gradient boosting, threshold tuned by cross-validation, SHAP explanations, fairness across age groups | [docs/MODEL.md](docs/MODEL.md) |
+| Tracking | Every run and model version in MLflow; the `champion` alias is what production serves | [docs/MLFLOW.md](docs/MLFLOW.md) |
+| Serving | FastAPI with validation, API keys, request IDs, JSON logs; 76 requests/s at 12 ms median | [Prediction API](#prediction-api) |
+| Monitoring | Drift two ways: PSI/KS and Evidently's per-type tests, on batches and on live traffic; Prometheus metrics, Grafana | [docs/DRIFT.md](docs/DRIFT.md), [Grafana](#prometheus-and-grafana) |
+| Alerting | 8 unit-tested Prometheus alerts with a runbook; a weekly GitHub Action that opens a drift issue | [docs/RUNBOOK.md](docs/RUNBOOK.md) |
+| Release | Retrain, compare on the same holdout, run in **shadow** on live traffic, then promote; rollback in one command | [Shadow deployment](#shadow-deployment) |
+| Delivery | Tests on the lowest and highest dependencies, a non-root image with pinned hashes, Trivy scan, SBOM, signed provenance, Render Blueprint | [Docker](#docker), [DEPLOY.md](DEPLOY.md) |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    data[(Real credit data)] --> train["train.py / retrain.py"]
+    train -->|runs, versions| mlflow[("MLflow registry<br/>champion · challenger")]
+
+    client([Client]) -->|POST /predict| api["FastAPI<br/>serve.py"]
+    mlflow -->|champion| api
+    api -->|answer| client
+    mlflow -.->|challenger, after the response| api
+    api --> log[("Prediction log<br/>+ shadow comparisons")]
+    log --> drift["Live drift<br/>PSI · per-type tests"]
+
+    api -->|/metrics| prom["Prometheus<br/>8 alert rules"] --> grafana[Grafana]
+    dash["Streamlit dashboard<br/>monitor · inject drift · retrain"] <--> mlflow
+    gha["Weekly GitHub Action<br/>check.py"] -->|drift-alert issue| issue[GitHub issue]
+
+    ci["CI: tests, audit, Evidently check"] --> image["Image on GHCR<br/>Trivy · SBOM · provenance"] --> render[Render]
+```
 
 ## In simple words
 
