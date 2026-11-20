@@ -1,0 +1,85 @@
+# Alert rules for the prediction API. Prometheus evaluates them every 15 s;
+# firing alerts show at http://localhost:9090/alerts. Each one names the
+# runbook section that says what to do (docs/RUNBOOK.md).
+# Unit tests: monitoring/alerts_test.yml (promtool test rules).
+groups:
+  - name: observatory-service
+    rules:
+      - alert: ObservatoryApiDown
+        expr: up{job="observatory-api"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "The prediction API is not answering scrapes"
+          runbook: "docs/RUNBOOK.md#api-down"
+
+      - alert: ObservatoryHighErrorRate
+        expr: |
+          sum(rate(observatory_http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(observatory_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "More than 5% of requests fail with a server error"
+          runbook: "docs/RUNBOOK.md#errors"
+
+      - alert: ObservatorySlowPredictions
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le) (rate(observatory_http_request_duration_seconds_bucket{route="/predict"}[5m]))) > 0.5
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "/predict p95 latency above 500 ms"
+          runbook: "docs/RUNBOOK.md#slow"
+
+  - name: observatory-model
+    rules:
+      - alert: ObservatoryLiveDrift
+        expr: max(observatory_live_drift_features_drifted) >= 3
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $value }} features drifted on live traffic (per-type tests)"
+          runbook: "docs/RUNBOOK.md#drift"
+
+      - alert: ObservatoryPsiAboveRetrainThreshold
+        expr: max(observatory_live_drift_psi) > 0.2
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "A feature's live PSI is above 0.2, the retrain rule's threshold"
+          runbook: "docs/RUNBOOK.md#drift"
+
+      - alert: ObservatoryPredictionShift
+        expr: |
+          abs(
+            sum(rate(observatory_predicted_probability_sum[30m])) / sum(rate(observatory_predicted_probability_count[30m]))
+            - sum(rate(observatory_predicted_probability_sum[1d] offset 1d))
+              / sum(rate(observatory_predicted_probability_count[1d] offset 1d))
+          ) > 0.1
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Mean predicted risk moved by more than 10 points against the day before"
+          runbook: "docs/RUNBOOK.md#drift"
+
+  - name: observatory-shadow
+    rules:
+      - alert: ObservatoryShadowErrors
+        expr: sum(rate(observatory_shadow_errors_total[5m])) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "The shadow challenger fails to score (clients are not affected)"
+          runbook: "docs/RUNBOOK.md#shadow"
+
+      - alert: ObservatoryShadowDisagreement
+        expr: |
+          sum(rate(observatory_shadow_disagreements_total[30m]))
+            / sum(rate(observatory_shadow_predictions_total[30m])) > 0.2
+        for: 30m
+        labels: {severity: info}
+        annotations:
+          summary: "The challenger disagrees with the champion on more than 20% of decisions"
+          runbook: "docs/RUNBOOK.md#shadow"

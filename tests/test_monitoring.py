@@ -36,7 +36,7 @@ def test_committed_dashboard_matches_its_generator():
 def test_every_dashboard_query_uses_a_metric_the_api_exports():
     """A renamed metric would otherwise leave a silently empty panel."""
     exported = exported_metric_names()
-    exprs = [t["expr"] for p in json.loads(DASHBOARD.read_text())["panels"] for t in p["targets"]]
+    exprs = [t["expr"] for p in json.loads(DASHBOARD.read_text())["panels"] for t in p.get("targets", [])]
     used = {m for e in exprs for m in re.findall(r"observatory_[a-z_]+", e)}
     assert used, "no queries found"
     assert used <= exported, f"unknown metrics: {sorted(used - exported)}"
@@ -45,7 +45,7 @@ def test_every_dashboard_query_uses_a_metric_the_api_exports():
 def test_dashboard_panels_are_unique_and_laid_out():
     panels = json.loads(DASHBOARD.read_text())["panels"]
     assert len({p["id"] for p in panels}) == len(panels)
-    assert all(p["datasource"]["uid"] == "prometheus" for p in panels)
+    assert all(p["datasource"]["uid"] == "prometheus" for p in panels if p["type"] != "row")
     assert all(0 <= p["gridPos"]["x"] and p["gridPos"]["x"] + p["gridPos"]["w"] <= 24 for p in panels)
 
 
@@ -112,3 +112,15 @@ def test_loadgen_ramps_drift_and_builds_valid_requests(trained):
     body = loadgen.make_request(5, 4.5, np.random.default_rng(0))
     serve.PredictRequest.model_validate(body)  # the API would accept it
     assert len(body["clients"]) == 5
+
+
+def test_every_alert_uses_a_metric_the_api_exports():
+    rules = yaml.safe_load((ROOT / "monitoring" / "alerts.yml").read_text())
+    exprs = [r["expr"] for g in rules["groups"] for r in g["rules"]]
+    used = {m for e in exprs for m in re.findall(r"observatory_[a-z_]+", e)}
+    assert used <= exported_metric_names(), f"unknown metrics: {sorted(used - exported_metric_names())}"
+    runbook = (ROOT / "docs" / "RUNBOOK.md").read_text().lower()
+    for g in rules["groups"]:
+        for r in g["rules"]:
+            anchor = r["annotations"]["runbook"].split("#")[1]
+            assert f"### {anchor.replace('-', ' ')}" in runbook, f"{r['alert']}: no runbook section {anchor}"

@@ -11,19 +11,31 @@ Endpoints (* = needs the X-API-Key header when a key is configured)
   POST /predict         * score one or more clients (?explain=true adds SHAP reasons)
   GET  /monitoring/drift * PSI of recent requests vs the active model's training data
   GET  /metrics         * Prometheus metrics
+  GET  /shadow          * champion vs the shadow challenger on live traffic
+  POST /shadow/{version} # put a version in shadow   (# = needs the admin key)
+  POST /shadow/promote  # make the challenger the champion
+  DELETE /shadow        # reject the challenger
 
 Configuration (environment variables)
   OBSERVATORY_ENV     "production" makes an API key mandatory and logs as JSON
   API_KEY             accepted key(s), comma-separated so keys can be rotated
+  ADMIN_API_KEY       key(s) for the endpoints that change the registry; without one
+                      they are disabled in production (open in local development)
   MAX_REQUEST_BYTES   largest accepted request body (default 1,000,000)
   LOG_LEVEL           default INFO
+  OBSERVATORY_ALIAS_TTL  seconds a registry alias lookup is reused (default 1)
   GIT_SHA             set at image build time, reported by /version
 
 The API always serves the MLflow registry's champion model. When a retrain promotes a
-new version (from the dashboard or retrain.py), the next request picks it up:
-no restart needed. Every scored client is written to a SQLite log, which the
+new version (from the dashboard or retrain.py), requests pick it up within
+OBSERVATORY_ALIAS_TTL seconds (default 1): no restart needed. Every scored
+client is written to a SQLite log, which the
 drift endpoint compares with the model's reference data. That's the same PSI
 check the dashboard uses, applied to live traffic, and it needs no labels.
+
+Shadow deployment: when the registry's `challenger` alias is set, every request
+is also scored by the challenger after the response is sent. Both predictions
+are logged side by side (see shadow.py); the client only ever gets the champion's.
 """
 import hmac
 import json
@@ -39,7 +51,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Security
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Security
 from fastapi.responses import JSONResponse, Response
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from prometheus_client import (
@@ -54,6 +66,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 import model as mdl
 import registry
+import shadow
 from drift import check_drift
 from make_data import FEATURE_NAMES
 from registry import get_active, load_registry
@@ -62,7 +75,7 @@ ROOT = Path(os.environ.get("OBSERVATORY_ROOT", "."))
 PREDICTION_LOG = Path(os.environ.get("PREDICTION_LOG", "logs/predictions.db"))
 MAX_BATCH = 1000
 MIN_DRIFT_ROWS = 50
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 log = logging.getLogger("observatory.api")
 
@@ -74,6 +87,7 @@ class Settings:
     max_request_bytes: int
     log_level: str
     git_sha: str
+    admin_keys: tuple = ()
 
     @property
     def production(self):
@@ -83,6 +97,7 @@ class Settings:
     def from_env(cls, env=None):
         env = os.environ if env is None else env
         keys = tuple(k.strip() for k in env.get("API_KEY", "").split(",") if k.strip())
+        admin = tuple(k.strip() for k in env.get("ADMIN_API_KEY", "").split(",") if k.strip())
         s = cls(
             environment=env.get("OBSERVATORY_ENV", "development").strip().lower(),
             api_keys=keys,
@@ -91,12 +106,17 @@ class Settings:
             # set at image build time; Render provides RENDER_GIT_COMMIT at runtime
             git_sha=env.get("GIT_SHA") if env.get("GIT_SHA", "unknown") != "unknown"
             else env.get("RENDER_GIT_COMMIT", "unknown"),
+            admin_keys=admin,
         )
         if s.production and not s.api_keys:
             # fail fast: never serve an unprotected API in production
             raise RuntimeError("OBSERVATORY_ENV=production requires API_KEY to be set")
         if any(len(k) < 16 for k in s.api_keys):
             raise RuntimeError("every API_KEY must be at least 16 characters")
+        if any(len(k) < 16 for k in s.admin_keys):
+            raise RuntimeError("every ADMIN_API_KEY must be at least 16 characters")
+        if set(s.admin_keys) & set(s.api_keys):
+            raise RuntimeError("ADMIN_API_KEY must differ from API_KEY")
         return s
 
 
@@ -176,6 +196,36 @@ class Metrics:
             "observatory_live_drift_window_rows", "Scored clients in the last drift check",
             ["model_version"], registry=self.registry,
         )
+        self.challenger = Gauge(
+            "observatory_challenger_model_info", "Model version scored in shadow (value is always 1)",
+            ["version"], registry=self.registry,
+        )
+        self.shadow_predictions = Counter(
+            "observatory_shadow_predictions_total", "Clients scored by the shadow challenger",
+            ["champion_version", "challenger_version"], registry=self.registry,
+        )
+        self.shadow_disagreements = Counter(
+            "observatory_shadow_disagreements_total",
+            "Clients where the challenger's decision differs from the champion's",
+            ["champion_version", "challenger_version"], registry=self.registry,
+        )
+        self.shadow_defaults = Counter(
+            "observatory_shadow_predicted_defaults_total", "Clients the challenger would flag",
+            ["challenger_version"], registry=self.registry,
+        )
+        self.shadow_abs_diff = Counter(
+            "observatory_shadow_abs_probability_difference_total",
+            "Sum over clients of |challenger - champion| probability (divide by the predictions counter)",
+            ["champion_version", "challenger_version"], registry=self.registry,
+        )
+        self.shadow_errors = Counter(
+            "observatory_shadow_errors_total", "Shadow scoring failures (never affect the response)",
+            registry=self.registry,
+        )
+        self.shadow_latency = Histogram(
+            "observatory_shadow_duration_seconds", "Time to score one request with the challenger",
+            registry=self.registry,
+        )
         self._drift_checked_at = 0.0
 
     def record_drift(self, version, rows, report=None):
@@ -197,6 +247,11 @@ class Metrics:
     def set_active(self, version):
         self.active_model.clear()
         self.active_model.labels(version=version).set(1)
+
+    def set_challenger(self, version):
+        self.challenger.clear()
+        if version:
+            self.challenger.labels(version=version).set(1)
 
 
 class Client(BaseModel):
@@ -275,33 +330,56 @@ class ModelHolder:
     be read for a moment, the model already in memory keeps serving.
     """
 
-    def __init__(self, root):
+    role = "champion"
+
+    def __init__(self, root, alias_ttl=None):
         self.root = Path(root)
+        # how long a registry lookup of the alias is reused. Each lookup is a
+        # database query (about 3 ms); a promotion is picked up within this time
+        ttl = os.environ.get("OBSERVATORY_ALIAS_TTL", 1.0) if alias_ttl is None else alias_ttl
+        self.alias_ttl = float(ttl)
+        self._checked = (None, -1e9)  # (key, when)
         self._lock = threading.Lock()
-        self._key = None
+
+        self._key_loaded = None
         self.entry = None
         self.model = None
         self.reference = None
         self._explainer = None
 
+    def _key(self):
+        return registry.champion_key(self.root)
+
+    def _entry(self):
+        return get_active(load_registry(self.root))
+
     def get(self):
         mdl.cap_threads()  # requests run in worker threads; OpenMP's limit is per thread
         try:
-            key = registry.champion_key(self.root)
-            entry = None if key == self._key else get_active(load_registry(self.root))
+            key, when = self._checked
+            if time.monotonic() - when >= self.alias_ttl:
+                key = self._key()
+                self._checked = (key, time.monotonic())
+            entry = None if key == self._key_loaded or key is None else self._entry()
         except Exception:
             if self.model is None:
                 raise
             log.exception("registry unavailable; serving the model already loaded")
             return self.entry, self.model, self.reference
-        if key != self._key:
+        if key is None:  # only the challenger can be absent
+            return None
+        if key != self._key_loaded:
             with self._lock:
-                if key != self._key:
+                if key != self._key_loaded:
                     model = registry.load_model(entry)
                     reference = registry.load_reference(entry)
-                    self.entry, self.model, self.reference, self._key = entry, model, reference, key
-                    log.info("model loaded", extra={"fields": {"model_version": entry["version"]}})
+                    self.entry, self.model, self.reference, self._key_loaded = entry, model, reference, key
+                    log.info(f"{self.role} loaded", extra={"fields": {"model_version": entry["version"]}})
         return self.entry, self.model, self.reference
+
+    def invalidate(self):
+        """Forget the cached alias lookup, so the next get() asks the registry."""
+        self._checked = (None, -1e9)
 
     def explainer(self):
         """SHAP explainer for the loaded model, built on first use."""
@@ -309,6 +387,24 @@ class ModelHolder:
         if self._explainer is None or self._explainer[0] is not model:
             self._explainer = (model, mdl.explainer(model))
         return self._explainer[1]
+
+
+class ChallengerHolder(ModelHolder):
+    """The shadow challenger, or None from get() when the alias isn't set."""
+
+    role = "challenger"
+
+    def _key(self):
+        return registry.challenger_key(self.root)
+
+    def _entry(self):
+        return registry.get_challenger(self.root)
+
+    def get(self):
+        got = super().get()
+        if got is None:
+            self.entry = self.model = self.reference = self._key_loaded = None  # free the memory
+        return got
 
 
 class PredictionLog:
@@ -324,6 +420,7 @@ class PredictionLog:
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, request_id TEXT, ts REAL, "
                 "model_version TEXT, features TEXT, probability REAL)"
             )
+            db.execute(shadow.SCHEMA)
 
     @contextmanager
     def _connect(self):
@@ -349,6 +446,21 @@ class PredictionLog:
                 rows,
             )
 
+    def write_shadow(self, request_id, champion_version, challenger_version, champion, challenger):
+        """champion, challenger: (probabilities, decisions) for the same clients."""
+        now = time.time()
+        rows = [
+            (request_id, now, champion_version, challenger_version, float(cp), float(sp), int(cd), int(sd))
+            for cp, cd, sp, sd in zip(*champion, *challenger, strict=True)
+        ]
+        with self._connect() as db:
+            db.executemany(
+                "INSERT INTO shadow_predictions (request_id, ts, champion_version, challenger_version, "
+                "champion_probability, challenger_probability, champion_default, challenger_default) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+
     def recent(self, version, limit):
         with self._connect() as db:
             rows = db.execute(
@@ -366,6 +478,7 @@ async def lifespan(app):
     app.state.settings = settings
     app.state.metrics = Metrics()
     app.state.holder = ModelHolder(ROOT)
+    app.state.challenger = ChallengerHolder(ROOT)
     app.state.log = PredictionLog(PREDICTION_LOG)
     try:
         entry, _, _ = app.state.holder.get()  # load once at startup so /ready is true immediately
@@ -416,6 +529,26 @@ def require_api_key(
 
 
 protected = [Depends(require_api_key)]
+
+
+def require_admin_key(
+    request: Request,
+    key: str | None = Security(_api_key_header),
+    bearer: HTTPAuthorizationCredentials | None = Security(_bearer),
+):
+    """For endpoints that change which model is served. A separate key, so a
+    client that can score can't also promote models."""
+    settings = request.app.state.settings
+    if not settings.admin_keys:
+        if settings.production:
+            raise HTTPException(403, "admin endpoints are disabled: set ADMIN_API_KEY to enable them")
+        return  # local development
+    key = key if key is not None else (bearer.credentials if bearer else None)
+    if key is None or not any(hmac.compare_digest(key, k) for k in settings.admin_keys):
+        raise HTTPException(401, "missing or invalid admin key", headers={"WWW-Authenticate": "ApiKey"})
+
+
+admin = [Depends(require_admin_key)]
 
 
 @app.middleware("http")
@@ -528,6 +661,7 @@ def model_info():
 def predict(
     req: PredictRequest,
     request: Request,
+    background: BackgroundTasks,
     explain: bool = Query(False, description="Add each feature's SHAP contribution to every prediction"),
 ):
     entry, model, _ = app.state.holder.get()
@@ -535,14 +669,16 @@ def predict(
     clients = [c.model_dump() for c in req.clients]
     X = pd.DataFrame(clients, columns=FEATURE_NAMES)
     proba = model.predict_proba(X)[:, 1]
-    decisions = model.predict(X).astype(bool)
     threshold = mdl.threshold(model)
+    decisions = proba >= threshold  # what model.predict does, without scoring twice
     request_id = request.state.request_id
     app.state.log.write(request_id, entry["version"], clients, proba)
     app.state.metrics.predictions.labels(entry["version"]).inc(len(clients))
     app.state.metrics.predicted_defaults.labels(entry["version"]).inc(int(decisions.sum()))
     for p in proba:
         app.state.metrics.probability.labels(entry["version"]).observe(float(p))
+    # after the response is sent, so the challenger never adds latency or errors
+    background.add_task(score_shadow, request_id, entry["version"], X, proba, decisions)
     reasons, base = [None] * len(clients), None
     if explain:
         contrib, base = mdl.contributions(model, X, app.state.holder.explainer())
@@ -563,6 +699,85 @@ def predict(
             for p, d, r in zip(proba, decisions, reasons, strict=True)
         ],
     )
+
+
+def score_shadow(request_id, champion_version, X, proba, decisions):
+    """Scores a request with the challenger, if there is one, and logs both predictions."""
+    m = app.state.metrics
+    try:
+        got = app.state.challenger.get()
+        if got is None or got[0]["version"] == champion_version:
+            m.set_challenger(None)
+            return
+        entry, model, _ = got
+        version = entry["version"]
+        m.set_challenger(version)
+        start = time.perf_counter()
+        s_proba = model.predict_proba(X)[:, 1]
+        s_decisions = s_proba >= mdl.threshold(model)
+        m.shadow_latency.observe(time.perf_counter() - start)
+        app.state.log.write_shadow(
+            request_id, champion_version, version, (proba, decisions), (s_proba, s_decisions)
+        )
+        m.shadow_predictions.labels(champion_version, version).inc(len(X))
+        m.shadow_disagreements.labels(champion_version, version).inc(int((s_decisions != decisions).sum()))
+        m.shadow_defaults.labels(version).inc(int(s_decisions.sum()))
+        m.shadow_abs_diff.labels(champion_version, version).inc(float(abs(s_proba - proba).sum()))
+    except Exception:  # the champion's answer has already gone out; never let this fail loudly
+        m.shadow_errors.inc()
+        log.exception("shadow scoring failed", extra={"fields": {"request_id": request_id}})
+
+
+def _invalidate():
+    app.state.holder.invalidate()
+    app.state.challenger.invalidate()
+
+
+@app.get("/shadow", dependencies=protected)
+def shadow_status():
+    """Champion vs the shadow challenger on live traffic, with a promotion verdict.
+
+    Verdicts: promote, review (behaviour changed a lot), reject (worse offline),
+    keep_watching (not enough shadow traffic yet).
+    """
+    s = shadow.status(ROOT, app.state.log.path)
+    return s if s is not None else {"challenger": None, "detail": "no challenger in shadow"}
+
+
+@app.post("/shadow/promote", dependencies=admin)
+def shadow_promote():
+    """Makes the challenger the champion. The API serves it from the next request."""
+    challenger = registry.get_challenger(ROOT)
+    if challenger is None:
+        raise HTTPException(409, "no challenger in shadow")
+    e = registry.promote(challenger["version"], ROOT)
+    _invalidate()
+    log.info("challenger promoted", extra={"fields": {"model_version": e["version"]}})
+    return {"champion": e["version"]}
+
+
+@app.post("/shadow/{version}", dependencies=admin)
+def shadow_start(version: str):
+    """Puts a registered version in shadow."""
+    try:
+        e = registry.start_shadow(version, ROOT)
+        _invalidate()
+    except ValueError as err:
+        raise HTTPException(409, str(err)) from err
+    except Exception as err:  # noqa: BLE001 - unknown version
+        raise HTTPException(404, f"no model version {version}") from err
+    log.info("challenger in shadow", extra={"fields": {"model_version": e["version"]}})
+    return {"challenger": e["version"]}
+
+
+@app.delete("/shadow", dependencies=admin)
+def shadow_stop():
+    """Rejects the challenger and stops shadow scoring."""
+    e = registry.stop_shadow(ROOT)
+    _invalidate()
+    if e is None:
+        raise HTTPException(409, "no challenger in shadow")
+    return {"rejected": e["version"]}
 
 
 @app.get("/monitoring/drift", dependencies=protected)

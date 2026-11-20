@@ -2,7 +2,7 @@
 
 A Streamlit dashboard that watches a credit-default model trained on **real data** (30,000 credit card clients), warns when **data drift** or a **performance drop** happens, retrains the model, and compares v1 against v2 before promoting it.
 
-Built with Python, pandas, scikit-learn, SHAP, MLflow, Evidently, FastAPI, Streamlit, plotly and Docker. Experiments and the model registry run on MLflow. Drift is measured two ways: PSI and KS (my own implementation, which drives the retrain rule), and Evidently's per-type tests, reproduced in scipy and checked against Evidently itself, which also produces the HTML drift reports.
+Built with Python, pandas, scikit-learn, SHAP, MLflow, Evidently, FastAPI, Streamlit, plotly, Prometheus, Grafana and Docker. Experiments and the model registry run on MLflow. Drift is measured two ways: PSI and KS (my own implementation, which drives the retrain rule), and Evidently's per-type tests, reproduced in scipy and checked against Evidently itself, which also produces the HTML drift reports.
 
 **Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/
 
@@ -51,6 +51,9 @@ In one sentence: it is a smoke detector for a credit model. It spots when the mo
 | Explanations: why the model flags a client (SHAP), and what it relies on overall | Explain tab, `POST /predict?explain=true` |
 | Model card with data, calibration, fairness across age groups, limits and failure modes | Model card tab |
 | Downloadable drift report (CSV) | Monitoring tab |
+| Shadow deployment: a challenger scores live traffic next to the champion, with a promotion verdict | `retrain.py --shadow`, `GET /shadow`, Grafana |
+| Grafana dashboard and 8 unit-tested Prometheus alerts, each linked to a runbook | `docker compose --profile monitoring` |
+| Backups of the model store and prediction log, rollback in one command | `backup.py`, `shadow.py promote v1` |
 
 ## Screenshots
 
@@ -62,7 +65,7 @@ In one sentence: it is a smoke detector for a credit model. It spots when the mo
 ![Explain: a client 2 months late is flagged at 70% risk; SHAP shows repayment status drives it](screenshots/explain.png)
 ![Model card: calibration plot and fairness across age groups](screenshots/model_card.png)
 ![Evidently drift report for batch 9: all 10 features drifted](screenshots/evidently_report.png)
-![Grafana: live drift climbing on demo traffic, served by the API's Prometheus metrics](screenshots/grafana.png)
+![Grafana: live drift climbing on demo traffic, and a challenger in shadow that would flag 58% of clients where the champion flags 39%](screenshots/grafana.png)
 
 ## Key finding: silent failure
 
@@ -119,14 +122,28 @@ uvicorn serve:app --port 8000
 | `POST /predict` 🔑 | Scores 1 to 1,000 clients. Inputs are validated (ranges, no unknown fields) |
 | `GET /monitoring/drift` 🔑 | PSI and KS of recent requests against the active model's training data |
 | `GET /metrics` 🔑 | Prometheus metrics |
+| `GET /shadow` 🔑 | Champion vs the shadow challenger on live traffic, with a promotion verdict |
+| `POST /shadow/{version}`, `POST /shadow/promote`, `DELETE /shadow` 🛡️ | Start a shadow deployment, promote the challenger, reject it |
 
-🔑 needs an `X-API-Key` header when `API_KEY` is set. Locally it's optional. In production (`OBSERVATORY_ENV=production`, the Docker image's default) the API refuses to start without a key.
+🔑 needs an `X-API-Key` header (or `Authorization: Bearer`) when `API_KEY` is set. 🛡️ needs `ADMIN_API_KEY`, a separate key, so a client that can score can't change which model is served; in production these endpoints are off without it. Locally it's optional. In production (`OBSERVATORY_ENV=production`, the Docker image's default) the API refuses to start without a key.
 
 ```
 curl -X POST localhost:8000/predict -H "X-API-Key: $API_KEY" -H 'content-type: application/json' -d '{"clients": [{"credit_limit": 50000, "age": 29, "education": 2, "marriage": 2, "repay_status_sep": 2, "repay_status_aug": 2, "repay_status_jul": 0, "bill_sep": 48000, "paid_sep": 0, "paid_aug": 1500}]}'
 ```
 
-Add `?explain=true` to get, for every client, each feature's SHAP contribution in log-odds, largest first; they add up to the prediction. The `default` decision uses the model version's own tuned threshold, which the response reports. Interactive docs are at `/docs`. Every response carries an `X-Request-ID`, and production logs are one JSON line per request. Every scored client is logged to SQLite (`logs/predictions.db`), and `/monitoring/drift` runs the same PSI check as the dashboard on that live traffic. That needs no labels, so it's the early warning in production, where true defaults arrive months later. On every request the API asks the MLflow registry which version holds the `champion` alias, so when a retrain promotes a new version it is served on the next request without a restart.
+Add `?explain=true` to get, for every client, each feature's SHAP contribution in log-odds, largest first; they add up to the prediction. The `default` decision uses the model version's own tuned threshold, which the response reports. Interactive docs are at `/docs`. Every response carries an `X-Request-ID`, and production logs are one JSON line per request. Every scored client is logged to SQLite (`logs/predictions.db`), and `/monitoring/drift` runs the same PSI check as the dashboard on that live traffic. That needs no labels, so it's the early warning in production, where true defaults arrive months later. The API asks the MLflow registry which version holds the `champion` alias (cached for one second), so when a retrain promotes a new version it is served within a second, without a restart.
+
+### Shadow deployment
+
+A model that wins on an offline holdout can still behave very differently on today's traffic. So a new model can run in **shadow** first: the champion answers every request, and the challenger scores the same request after the response has gone out. Both predictions are logged side by side; no client ever sees the challenger's.
+
+```
+python retrain.py --shadow     # train v2 and put it in shadow (MLflow alias "challenger")
+python shadow.py status        # agreement, share each model flags, offline AUCs, verdict
+python shadow.py promote       # or: POST /shadow/promote with the admin key
+```
+
+The verdict is `promote`, `review` (it would change the share flagged by more than 10 points), `reject` (worse offline) or `keep_watching` (fewer than 500 clients compared). In the compose demo, v2 beats v1 offline (AUC 0.69 vs 0.58), but in shadow it would flag 60% of clients where v1 flags 35%, so the verdict is `review`, not an automatic promotion. The [runbook](docs/RUNBOOK.md#shipping-a-new-model-shadow-first) walks through it.
 
 ## Docker
 
@@ -151,13 +168,18 @@ docker run -p 8501:8501 observatory dashboard
 docker compose --profile monitoring --profile demo up --build
 ```
 
-This adds three services to the stack above:
+This adds these services to the stack above:
 
 - **Prometheus** on http://localhost:9090 scrapes the API's `/metrics` every 15 s, sending the API key as a Bearer token.
 - **Grafana** on http://localhost:3000 opens straight on a provisioned dashboard (no login to view; admin password from `GRAFANA_ADMIN_PASSWORD`).
+- **shadow-init** trains v2 on the recent batches once and puts it in shadow, so the dashboard's shadow row compares it with v1.
 - **loadgen** (`loadgen.py`) sends real, unseen clients to `/predict` and ramps drift up over `RAMP_MINUTES` (default 10), following the same scenario as the simulation.
 
 The dashboard shows the model in production, traffic, share flagged, 5xx errors, latency percentiles, the distribution of predicted risk (prediction drift, visible before any label arrives) and live drift per feature, both PSI and the per-type tests that match Evidently. The API recomputes live drift on the last 500 scored clients at most every 15 s when scraped.
+
+A shadow row compares the challenger with the champion on the same traffic: decision agreement, the share each would flag, the mean probability difference, shadow errors and latency.
+
+Prometheus also loads [8 alert rules](monitoring/alerts.yml) (API down, error rate, latency, live drift, PSI above the retrain threshold, a shift in predicted risk, shadow errors and disagreement). Each has a unit test (`promtool test rules`, run in CI) and links to a section of the [runbook](docs/RUNBOOK.md) that says what to do.
 
 The dashboard is generated by `monitoring/build_dashboard.py`, and a test checks that every query uses a metric the API exports, so renaming a metric can't leave a silently empty panel. Leave out `--profile demo` to watch your own traffic.
 
@@ -248,4 +270,3 @@ The UCI [Default of Credit Card Clients](https://doi.org/10.24432/C55S3H) datase
 ## Next
 
 - Use Evidently directly in the app once it supports pandas 3 (the agreement test makes the switch safe)
-- Shadow deployment: score live traffic with a challenger before promoting it

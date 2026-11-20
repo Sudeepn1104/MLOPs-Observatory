@@ -9,7 +9,10 @@ ARG MLFLOW_VERSION=3.18.0
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     MLFLOW_DISABLE_TELEMETRY=true \
-    DO_NOT_TRACK=true
+    DO_NOT_TRACK=true \
+    # the server's background job runner (GenAI features we don't use) starts about
+    # 120 processes and 1.8 GB; without it the UI needs about 350 MB
+    MLFLOW_SERVER_ENABLE_JOB_EXECUTION=false
 
 RUN pip install "mlflow==${MLFLOW_VERSION}" \
     && useradd --create-home --uid 10001 app
@@ -23,4 +26,5 @@ EXPOSE 5000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
     CMD ["python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.build_opener(urllib.request.ProxyHandler({})).open('http://127.0.0.1:5000/health', timeout=4).status == 200 else 1)"]
 
-CMD ["mlflow", "server", "--backend-store-uri", "sqlite:////app/models/mlflow.db", "--host", "0.0.0.0", "--port", "5000"]
+# one worker: a UI that one person uses at a time
+CMD ["mlflow", "server", "--backend-store-uri", "sqlite:////app/models/mlflow.db", "--host", "0.0.0.0", "--port", "5000", "--workers", "1"]

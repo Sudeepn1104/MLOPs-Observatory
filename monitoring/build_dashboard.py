@@ -24,7 +24,12 @@ def thresholds(*steps):
     return {"mode": "absolute", "steps": [{"value": v, "color": c} for v, c in steps]}
 
 
-def stat(title, expr, x, w, unit="none", decimals=None, steps=None, legend="", desc="", text=False):
+def row(title, y):
+    return {"id": next(_id), "type": "row", "title": title, "collapsed": False, "panels": [],
+            "gridPos": {"x": 0, "y": y, "w": 24, "h": 1}}
+
+
+def stat(title, expr, x, w, unit="none", decimals=None, steps=None, legend="", desc="", text=False, y=0):
     defaults = {"unit": unit, "thresholds": steps or thresholds((None, "blue"))}
     if decimals is not None:
         defaults["decimals"] = decimals
@@ -32,7 +37,7 @@ def stat(title, expr, x, w, unit="none", decimals=None, steps=None, legend="", d
             "colorMode": "background" if steps else "value", "graphMode": "none",
             "textMode": "name" if text else "value", "justifyMode": "center"}
     return {"id": next(_id), "type": "stat", "title": title, "description": desc,
-            "datasource": DS, "gridPos": {"x": x, "y": 0, "w": w, "h": 4},
+            "datasource": DS, "gridPos": {"x": x, "y": y, "w": w, "h": 4},
             "targets": [target(expr, legend)],
             "fieldConfig": {"defaults": defaults, "overrides": []}, "options": opts}
 
@@ -103,6 +108,42 @@ def build():
                        f'(rate(observatory_http_request_duration_seconds_bucket{{route="/predict"}}[5m])))',
                        f"/predict p{int(q * 100)}", r) for q, r in ((0.5, "A"), (0.95, "B"), (0.99, "C"))],
                16, 13, 8, 8, unit="s"),
+        row("Shadow deployment: the challenger scores the same traffic, clients only see the champion", 21),
+        stat("Challenger in shadow", "observatory_challenger_model_info", 0, 4, legend="{{version}}",
+             text=True, y=22,
+             desc="The version the MLflow alias 'challenger' points at. Empty when nothing is in "
+                  "shadow. Start one with: python retrain.py --shadow"),
+        stat("Decision agreement",
+             "1 - sum(rate(observatory_shadow_disagreements_total[5m]))"
+             " / sum(rate(observatory_shadow_predictions_total[5m]))",
+             4, 5, unit="percentunit", decimals=1, y=22,
+             steps=thresholds((None, "red"), (0.8, "orange"), (0.9, "green")),
+             desc="Share of clients where the challenger makes the same decision as the champion."),
+        stat("Mean |probability difference|",
+             "sum(rate(observatory_shadow_abs_probability_difference_total[5m]))"
+             " / sum(rate(observatory_shadow_predictions_total[5m]))",
+             9, 5, unit="percentunit", decimals=1, y=22),
+        stat("Shadow errors", "sum(rate(observatory_shadow_errors_total[5m])) or vector(0)", 14, 5,
+             unit="reqps", decimals=2, y=22, steps=thresholds((None, "green"), (0.001, "red")),
+             desc="Failures scoring the challenger. They never reach a client."),
+        stat("Shadow scoring p95",
+             "histogram_quantile(0.95, sum by (le) (rate(observatory_shadow_duration_seconds_bucket[5m])))",
+             19, 5, unit="s", decimals=1, y=22,
+             desc="Runs after the response is sent, so it adds nothing to client latency."),
+        series("Share flagged as default: champion vs challenger",
+               [target("sum(rate(observatory_predicted_defaults_total[5m]))"
+                       " / sum(rate(observatory_predictions_total[5m]))", "champion", "A"),
+                target("sum by (challenger_version) (rate(observatory_shadow_predicted_defaults_total[5m]))"
+                       " / sum by (challenger_version) (rate(observatory_shadow_predictions_total[5m]))",
+                       "challenger {{challenger_version}}", "B")],
+               0, 26, 12, 8, unit="percentunit", max_=1,
+               desc="A large gap means promoting would change many decisions: shadow.py asks for a "
+                    "person's review when it exceeds 10 points."),
+        series("Disagreement rate",
+               [target("sum by (challenger_version) (rate(observatory_shadow_disagreements_total[5m]))"
+                       " / sum by (challenger_version) (rate(observatory_shadow_predictions_total[5m]))",
+                       "{{challenger_version}} vs champion")],
+               12, 26, 12, 8, unit="percentunit", max_=1),
     ]
     return {
         "uid": "mlops-observatory",
