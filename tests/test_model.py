@@ -123,3 +123,33 @@ def test_explanations_work_for_other_tree_models_too(data):
     assert mdl.inner_model(rf) is rf
     contrib, base = mdl.contributions(rf, X.head(5))
     assert contrib.shape == (5, X.shape[1]) and isinstance(base, float)
+
+
+def test_thread_cap_reaches_threads_that_score_models(trained):
+    """Regression: the cap was set once at import, so Streamlit's script threads and the
+    API's worker threads still used one OpenMP thread per visible core (64 in the test)."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import threading\n"
+        "from threadpoolctl import threadpool_info\n"
+        "import registry, serve\n"
+        "omp = lambda: max(i['num_threads'] for i in threadpool_info() if i['user_api'] == 'openmp')\n"
+        "out = {}\n"
+        "def plain(): out['plain'] = omp()\n"
+        "def scoring():\n"
+        "    serve.ModelHolder('.').get()\n"
+        "    out['scoring'] = omp()\n"
+        "for f in (plain, scoring):\n"
+        "    t = threading.Thread(target=f); t.start(); t.join()\n"
+        "print(out['plain'], out['scoring'])\n"
+    )
+    env = {**os.environ, "OMP_NUM_THREADS": "64", "PYTHONPATH": str(Path(__file__).resolve().parent.parent)}
+    env.pop("OBSERVATORY_THREADS", None)
+    res = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    plain, scoring = res.stdout.split()[-2:]
+    assert plain == "64", "test setup: a new thread should start uncapped"
+    assert scoring == str(mdl.MAX_THREADS), res.stderr[-500:]

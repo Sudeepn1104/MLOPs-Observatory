@@ -40,6 +40,9 @@ FEATURES = {
     "PAY_AMT2": "paid_aug",
 }
 FEATURE_NAMES = list(FEATURES.values())
+# Codes, not quantities: drift on these is measured by comparing category shares
+CATEGORICAL = ["education", "marriage", "repay_status_sep", "repay_status_aug", "repay_status_jul"]
+NUMERICAL = [f for f in FEATURE_NAMES if f not in CATEGORICAL]
 
 
 def load_raw(path=RAW):

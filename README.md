@@ -2,7 +2,7 @@
 
 A Streamlit dashboard that watches a credit-default model trained on **real data** (30,000 credit card clients), warns when **data drift** or a **performance drop** happens, retrains the model, and compares v1 against v2 before promoting it.
 
-Built with Python, pandas, scikit-learn, SHAP, MLflow, FastAPI, Streamlit, plotly and Docker. Experiments and the model registry run on MLflow. The drift tests (PSI and KS) are my own implementation, not a library.
+Built with Python, pandas, scikit-learn, SHAP, MLflow, Evidently, FastAPI, Streamlit, plotly and Docker. Experiments and the model registry run on MLflow. Drift is measured two ways: PSI and KS (my own implementation, which drives the retrain rule), and Evidently's per-type tests, reproduced in scipy and checked against Evidently itself, which also produces the HTML drift reports.
 
 **Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/
 
@@ -61,6 +61,7 @@ In one sentence: it is a smoke detector for a credit model. It spots when the mo
 ![Silent failure: PSI green but AUC 0.40](screenshots/injector.png)
 ![Explain: a client 2 months late is flagged at 70% risk; SHAP shows repayment status drives it](screenshots/explain.png)
 ![Model card: calibration plot and fairness across age groups](screenshots/model_card.png)
+![Evidently drift report for batch 9: all 10 features drifted](screenshots/evidently_report.png)
 
 ## Key finding: silent failure
 
@@ -71,7 +72,7 @@ When the data **inputs** shift, PSI turns red. When the **rule** that decides de
 1. `make_data.py` loads the real dataset and splits it into 20,000 rows for training and 10,000 rows the model never trains on (the stream pool). `make_batch()` draws batches from the pool and can add input drift (resampling real clients, for example more older ones) and concept drift (a share of labels follows a different default rule).
 2. `train.py` tunes a gradient-boosting model with a 5-fold cross-validated search, tunes its decision threshold, and evaluates it on a held-out test split: ranking, calibration and fairness across age groups. It logs everything to MLflow (each search candidate is a child run), registers the model as version 1 and points the `champion` alias at it. `model.py` holds the modelling code; [docs/MODEL.md](docs/MODEL.md) explains the choices.
 3. `simulate.py` sends 10 batches of 500 clients with growing input drift. Concept drift starts at batch 4. It logs PSI, KS and metrics per batch.
-4. `drift.py` computes PSI and the KS test per feature.
+4. `drift.py` computes, per feature, PSI and the KS test, plus the tests Evidently uses by default: normalised Wasserstein distance for amounts and Jensen-Shannon distance for codes such as education or repayment status. `drift_report.py` builds Evidently's interactive HTML drift report in its own environment, because Evidently doesn't support pandas 3 yet; a test proves `drift.py` gives the same scores and decisions. [docs/DRIFT.md](docs/DRIFT.md) explains the design.
 5. `monitor.py` applies the retrain rule to the active model, using only the batches it scored itself and its own baseline AUC. It also streams new batches, which keep the drifted conditions of batch 9 and are scored by the active model.
 6. `retrain.py` trains a challenger on the last 4 batches and tests both models on the same holdout. Every retrain is an MLflow run and a new registered version. The `champion` alias moves to it only if its AUC is at least as good; otherwise the version is recorded as rejected.
 7. `registry.py` is the only module that talks to MLflow. It stores runs and model versions in a SQLite MLflow store (`models/mlflow.db`), and saves models in the skops format, which cannot run code when loaded (unlike pickle). [docs/MLFLOW.md](docs/MLFLOW.md) explains the design.
@@ -229,4 +230,6 @@ The UCI [Default of Credit Card Clients](https://doi.org/10.24432/C55S3H) datase
 
 ## Next
 
-- Per-feature drift for categorical columns
+- Use Evidently directly in the app once it supports pandas 3 (the agreement test makes the switch safe)
+- Grafana dashboard on the API's Prometheus metrics
+- Shadow deployment: score live traffic with a challenger before promoting it
