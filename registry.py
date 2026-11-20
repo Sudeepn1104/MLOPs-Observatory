@@ -308,6 +308,7 @@ def _local(uri):
 
 def load_model(entry):
     """The fitted scikit-learn model of a registry entry."""
+    _model.cap_threads()
     return mlflow.sklearn.load_model(_local(entry["model_uri"]))
 
 

@@ -45,8 +45,11 @@ _reload_changed_sources()
 
 import model as mdl
 import registry
+
+# every Streamlit run is a new thread, and OpenMP's thread limit is per thread
+mdl.cap_threads()
 from bootstrap import build_all, needs_build
-from drift import check_drift
+from drift import DRIFT_THRESHOLD, check_drift
 from make_data import FEATURE_NAMES, TRAIN, make_batch
 from monitor import (
     AUC_DROP,
@@ -229,16 +232,27 @@ with tab_monitor:
     left, right = st.columns([3, 2])
 
     with left:
-        st.subheader("Drift heatmap (PSI per feature per batch)")
-        pivot = feature_log.pivot(index="feature", columns="batch", values="psi")
-        colorscale = [
-            [0.0, "#2e9e5b"],
-            [PSI_YELLOW / 0.3, "#2e9e5b"],
-            [PSI_YELLOW / 0.3, "#e8b931"],
-            [PSI_RED / 0.3, "#e8b931"],
-            [PSI_RED / 0.3, "#d64545"],
-            [1.0, "#d64545"],
-        ]
+        st.subheader("Drift heatmap (per feature per batch)")
+        measure = st.radio(
+            "Measure", ["PSI (drives the retrain rule)", "Per-type test (Evidently's method)"],
+            horizontal=True, label_visibility="collapsed",
+        )
+        per_type = measure.startswith("Per-type") and "drift_score" in feature_log.columns
+        pivot = feature_log.pivot(
+            index="feature", columns="batch", values="drift_score" if per_type else "psi"
+        )
+        if per_type:  # one threshold: below 0.1 no drift, at or above 0.1 drift
+            colorscale = [[0.0, "#2e9e5b"], [DRIFT_THRESHOLD / 0.3, "#2e9e5b"],
+                          [DRIFT_THRESHOLD / 0.3, "#d64545"], [1.0, "#d64545"]]
+        else:
+            colorscale = [
+                [0.0, "#2e9e5b"],
+                [PSI_YELLOW / 0.3, "#2e9e5b"],
+                [PSI_YELLOW / 0.3, "#e8b931"],
+                [PSI_RED / 0.3, "#e8b931"],
+                [PSI_RED / 0.3, "#d64545"],
+                [1.0, "#d64545"],
+            ]
         fig = px.imshow(
             pivot,
             color_continuous_scale=colorscale,
@@ -246,15 +260,23 @@ with tab_monitor:
             zmax=0.3,
             aspect="auto",
             text_auto=".2f",
-            labels=dict(x="Batch", y="Feature", color="PSI"),
+            labels=dict(x="Batch", y="Feature", color="score" if per_type else "PSI"),
         )
         fig.update_xaxes(dtick=1)
         st.plotly_chart(fig, width="stretch")
-        st.caption(
-            "Green < 0.1, yellow 0.1 to 0.2, red > 0.2 (values above 0.3 shown as red). "
-            "Each batch is compared with the training data of the model that scored it, "
-            "so after a retrain the drifted world becomes the new normal."
-        )
+        if per_type:
+            st.caption(
+                "Wasserstein distance (normed) for amounts and Jensen-Shannon distance for codes "
+                "(education, marriage, repayment status): the tests Evidently uses by default. "
+                "Red at 0.1 or above. These react earlier than PSI. "
+                "Full interactive report: `python drift_report.py` (see docs/DRIFT.md)."
+            )
+        else:
+            st.caption(
+                "Green < 0.1, yellow 0.1 to 0.2, red > 0.2 (values above 0.3 shown as red). "
+                "Each batch is compared with the training data of the model that scored it, "
+                "so after a retrain the drifted world becomes the new normal."
+            )
 
     with right:
         st.subheader("Model performance per batch")

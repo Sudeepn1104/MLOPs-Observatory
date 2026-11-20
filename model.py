@@ -13,6 +13,7 @@ Design (see docs/MODEL.md for the reasoning and the measurements behind it):
 - SHAP explanations per prediction, and fairness metrics across age groups.
 """
 import os
+import threading
 
 import numpy as np
 import pandas as pd
@@ -49,10 +50,26 @@ N_JOBS = int(os.environ.get("OBSERVATORY_JOBS", "1"))
 # Threads for gradient boosting (OpenMP). By default it starts one thread per
 # CPU core it can see. A shared cloud host can show dozens of cores while the
 # app may only use about one, and the threads then fight each other: in a
-# 1-CPU container with 64 threads, a retrain took over 40 s instead of 3 s.
-# The cap applies to this whole process, for as long as _thread_cap is alive.
+# 1-CPU container with 64 threads, a retrain took 108 s instead of 3.7 s.
+#
+# OpenMP's limit is per thread: setting it in one thread doesn't change
+# others. Streamlit runs every page run in a new thread and the API answers
+# requests in worker threads, so cap_threads() must be called in each thread
+# that fits or scores a model, not once at import. It's cheap after the first
+# call in a thread.
 MAX_THREADS = int(os.environ.get("OBSERVATORY_THREADS", "2"))
-_thread_cap = threadpool_limits(limits=MAX_THREADS, user_api="openmp")
+_capped = threading.local()
+
+
+def cap_threads():
+    """Limits OpenMP threads to MAX_THREADS in the calling thread (idempotent per thread)."""
+    if getattr(_capped, "done", False):
+        return
+    threadpool_limits(limits=MAX_THREADS, user_api="openmp")
+    _capped.done = True
+
+
+cap_threads()  # the importing thread (scripts run here)
 
 # the best parameters tune() found on the training data (CV AUC 0.773); used
 # by `python train.py --no-tune` and as a fallback (see docs/MODEL.md)
@@ -84,6 +101,7 @@ def base_model(params=None):
 
 def build_model(params=None):
     """Unfitted model: gradient boosting plus a cross-validated decision threshold."""
+    cap_threads()  # fitting happens in the caller's thread
     return TunedThresholdClassifierCV(
         base_model(params), scoring="f1", cv=CV_FOLDS, random_state=SEED, n_jobs=N_JOBS
     )
@@ -134,6 +152,7 @@ def calibration_error(y, proba, bins=10):
 
 def evaluate(model, X, y):
     """Ranking, calibration and decision metrics on one dataset."""
+    cap_threads()
     proba = model.predict_proba(X)[:, 1]
     pred = model.predict(X)
     r = lambda v: round(float(v), 4)  # noqa: E731

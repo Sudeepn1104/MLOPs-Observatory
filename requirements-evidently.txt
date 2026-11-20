@@ -1,0 +1,10 @@
+# Environment for drift_report.py only: Evidently's HTML drift reports.
+# Kept separate from the app because Evidently 0.7.23 doesn't support
+# pandas 3 (it imports a pandas internal that pandas 3 removed), needs
+# plotly < 6, and adds ~38 packages and ~170 MB per process.
+# The app's own drift check (drift.py) reproduces Evidently's tests with
+# scipy; tests/test_evidently_agreement.py checks they agree.
+-r requirements.txt
+evidently==0.7.23
+pandas<3
+plotly<6

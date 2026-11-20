@@ -46,6 +46,31 @@ jobs:
           python train.py
           python simulate.py
 
+  evidently:
+    name: evidently agreement + report
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install (separate environment, Evidently needs pandas < 3)
+        run: pip install -r requirements-evidently.txt pytest
+      - name: drift.py agrees with Evidently
+        run: python -m pytest tests/test_evidently_agreement.py tests/test_drift.py
+      - name: Build an example report
+        run: |
+          python make_data.py
+          python train.py --no-tune
+          python simulate.py
+          python drift_report.py --batch 9
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidently-drift-report
+          path: reports/
+          retention-days: 14
+
   audit:
     name: dependency audit
     runs-on: ubuntu-latest

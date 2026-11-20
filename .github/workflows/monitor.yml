@@ -36,9 +36,10 @@ jobs:
         with:
           python-version: "3.13"
           cache: pip
-          cache-dependency-path: requirements.txt
+          cache-dependency-path: requirements-evidently.txt
       - name: Install
-        run: pip install -r requirements.txt
+        # requirements-evidently.txt = the app's requirements + Evidently (pandas < 3)
+        run: pip install -r requirements-evidently.txt
       - name: Build data, model v1 and monitoring history
         run: |
           python make_data.py
@@ -63,6 +64,16 @@ jobs:
           cat report.md >> "$GITHUB_STEP_SUMMARY"
           if [ "$code" -eq 2 ]; then echo "::error::the check itself failed"; exit 2; fi
           echo "alert=$([ "$code" -eq 1 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+      - name: Evidently drift report for the latest batch
+        run: |
+          python drift_report.py
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Evidently drift report: download the **evidently-drift-report** artifact of this run." >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: evidently-drift-report
+          path: reports/
+          retention-days: 30
       - name: Open, update or close the drift-alert issue
         uses: actions/github-script@v9
         env:

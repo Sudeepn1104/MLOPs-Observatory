@@ -246,6 +246,7 @@ class ModelHolder:
         self._explainer = None
 
     def get(self):
+        mdl.cap_threads()  # requests run in worker threads; OpenMP's limit is per thread
         try:
             key = registry.champion_key(self.root)
             entry = None if key == self._key else get_active(load_registry(self.root))
