@@ -10,8 +10,8 @@
 ## 1. Deploy the API on Render (one-time, about 5 minutes)
 
 1. Sign in at https://dashboard.render.com with GitHub.
-2. **New → Blueprint**, pick this repository, and click **Apply**. Render reads `render.yaml`, builds the `Dockerfile` and generates a random `API_KEY`.
-3. When the deploy turns **Live**, open the service. Copy the URL (`https://mlops-observatory-api-XXXX.onrender.com`) and, under **Environment**, the `API_KEY` value.
+2. **New → Blueprint**, pick this repository, and click **Apply**. Render reads `render.yaml`, builds the `Dockerfile` and generates two random keys: `API_KEY` for clients, and `ADMIN_API_KEY` for changing which model is served (`/shadow/...`).
+3. When the deploy turns **Live**, open the service. Copy the URL (`https://mlops-observatory-api-XXXX.onrender.com`) and, under **Environment**, the `API_KEY` value. Keep `ADMIN_API_KEY` to yourself.
 4. Try it:
 
    ```
@@ -29,7 +29,7 @@ From then on, every push to `main` redeploys. Render only switches traffic once 
 **Free plan limits:**
 - The service sleeps after 15 minutes without traffic. The first request after that takes about a minute.
 - 512 MB RAM fits one worker (each holds the model and the MLflow client, about 320 MB).
-- There is no persistent disk, so the prediction log and the MLflow store reset to the image's v1 on every deploy and restart. On a paid plan, uncomment the `disk:` block in `render.yaml` to keep it.
+- There is no persistent disk, so the prediction log, the MLflow store and any challenger in shadow reset to the image's v1 on every deploy and restart. On a paid plan, uncomment the `disk:` block in `render.yaml` to keep it.
 
 ## 2. Configuration
 
