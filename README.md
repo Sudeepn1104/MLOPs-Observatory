@@ -10,7 +10,7 @@ The whole life of a production ML model, end to end: a credit-default model trai
 
 Built with Python, pandas, scikit-learn, SHAP, MLflow, Evidently, FastAPI, Streamlit, plotly, Prometheus, Grafana and Docker.
 
-**Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/ · **Deploy:** [DEPLOY.md](DEPLOY.md) · **Operate:** [RUNBOOK](docs/RUNBOOK.md) · **Changes:** [CHANGELOG](CHANGELOG.md)
+**Live demo:** https://mlops-observatory-sudeepunayak.streamlit.app/ · **Live API:** [mlops-observatory-api.onrender.com/docs](https://mlops-observatory-api.onrender.com/docs) (free plan: the first request after 15 idle minutes takes about a minute) · **Deploy:** [DEPLOY.md](DEPLOY.md) · **Operate:** [RUNBOOK](docs/RUNBOOK.md) · **Changes:** [CHANGELOG](CHANGELOG.md)
 
 ![Demo: drift is detected, a silent failure is caught, v2 is retrained, compared and takes over](screenshots/demo.gif)
 
