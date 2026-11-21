@@ -1,6 +1,6 @@
 # Runtime dependencies. Bounded to the next major version so an upstream
 # breaking release can't silently break the live demo. CI tests the range.
-numpy>=2.0,<3
+numpy>=2.5.5,<3
 pandas>=2.2.2,<4
 scikit-learn>=1.5,<2
 scipy>=1.13,<2
@@ -10,7 +10,7 @@ plotly>=5.18,<8
 # MLflow tracking and model registry (skinny = client only, no server/UI),
 # its SQLite backend, and skops for pickle-free model files
 mlflow-skinny>=3.10,<4
-sqlalchemy>=2.0.30,<3
+sqlalchemy>=2.1.9,<3
 alembic>=1.13,<2
 skops>=0.12,<1
 # SHAP explanations (TreeExplainer); recent versions no longer need numba
