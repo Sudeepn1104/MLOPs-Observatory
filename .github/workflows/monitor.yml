@@ -69,7 +69,7 @@ jobs:
           python drift_report.py
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Evidently drift report: download the **evidently-drift-report** artifact of this run." >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: evidently-drift-report
           path: reports/
