@@ -3,7 +3,7 @@
 | Part | Where it runs | How it updates |
 |---|---|---|
 | Dashboard (`app.py`) | Streamlit Community Cloud | Redeploys on every push to `main` |
-| Prediction API (`serve.py`) | Render, from `render.yaml` | Redeploys on every push to `main` |
+| Prediction API (`serve.py`) | Render: https://mlops-observatory-api.onrender.com | Redeploys on every push to `main` |
 | Docker image | GitHub Container Registry | Published after CI passes on `main`, and for `v*` tags |
 | Scheduled check | GitHub Actions | Every Monday, and on demand |
 
